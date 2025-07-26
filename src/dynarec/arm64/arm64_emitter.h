@@ -136,6 +136,19 @@ int convert_bitmask(uint64_t bitmask);
 
 // LDR
 #define LDR_gen(size, op1, imm9, op2, Rn, Rt)    ((size)<<30 | 0b111<<27 | (op1)<<24 | 0b01<<22 | (imm9)<<12 | (op2)<<10 | (Rn)<<5 | (Rt))
+// LDUR/STUR - Load/Store Unscaled Register (for unaligned access)
+#define LDUR_gen(size, op1, imm9, op2, Rn, Rt)    ((size)<<30 | 0b111<<27 | (op1)<<24 | 0b01<<22 | (imm9)<<12 | (op2)<<10 | (Rn)<<5 | (Rt))
+#define LDURx(Rt, Rn, imm9)                EMIT(LDUR_gen(0b11, 0b00, (imm9)&0x1ff, 0b10, Rn, Rt))
+#define LDURw(Rt, Rn, imm9)                EMIT(LDUR_gen(0b10, 0b00, (imm9)&0x1ff, 0b10, Rn, Rt))
+#define LDURB(Rt, Rn, imm9)                EMIT(LDUR_gen(0b00, 0b00, (imm9)&0x1ff, 0b10, Rn, Rt))
+#define LDURH(Rt, Rn, imm9)                EMIT(LDUR_gen(0b01, 0b00, (imm9)&0x1ff, 0b10, Rn, Rt))
+
+#define STUR_gen(size, op1, imm9, op2, Rn, Rt)    ((size)<<30 | 0b111<<27 | (op1)<<24 | 0b00<<22 | (imm9)<<12 | (op2)<<10 | (Rn)<<5 | (Rt))
+#define STURx(Rt, Rn, imm9)                EMIT(STUR_gen(0b11, 0b00, (imm9)&0x1ff, 0b10, Rn, Rt))
+#define STURw(Rt, Rn, imm9)                EMIT(STUR_gen(0b10, 0b00, (imm9)&0x1ff, 0b10, Rn, Rt))
+#define STURB(Rt, Rn, imm9)                EMIT(STUR_gen(0b00, 0b00, (imm9)&0x1ff, 0b10, Rn, Rt))
+#define STURH(Rt, Rn, imm9)                EMIT(STUR_gen(0b01, 0b00, (imm9)&0x1ff, 0b10, Rn, Rt))
+
 #define LDRx_S9_postindex(Rt, Rn, imm9)   EMIT(LDR_gen(0b11, 0b00, (imm9)&0x1ff, 0b01, Rn, Rt))
 #define LDRx_S9_preindex(Rt, Rn, imm9)    EMIT(LDR_gen(0b11, 0b00, (imm9)&0x1ff, 0b11, Rn, Rt))
 #define LDRw_S9_postindex(Rt, Rn, imm9)   EMIT(LDR_gen(0b10, 0b00, (imm9)&0x1ff, 0b01, Rn, Rt))
@@ -217,25 +230,26 @@ int convert_bitmask(uint64_t bitmask);
 #define LDURSBx_I9(Rt, Rn, imm9)          EMIT(LDU_gen(0b00, 0b10, imm9, Rn, Rt))
 #define LDURSBxw_I9(Rt, Rn, imm9)         EMIT(LDU_gen(0b00, (rex.w)?0b10:0b11, imm9, Rn, Rt))
 
-#define LDxw(A, B, C)   if(unscaled) {LDURxw_I9(A, B, C);} else {LDRxw_U12(A, B, C);}
-#define LDz(A, B, C)    if(unscaled) {LDURz_I9(A, B, C);} else {LDRz_U12(A, B, C);}
-#define LDx(A, B, C)    if(unscaled) {LDURx_I9(A, B, C);} else {LDRx_U12(A, B, C);}
-#define LDW(A, B, C)    if(unscaled) {LDURw_I9(A, B, C);} else {LDRw_U12(A, B, C);}
-#define LDH(A, B, C)    if(unscaled) {LDURH_I9(A, B, C);} else {LDRH_U12(A, B, C);}
-#define LDB(A, B, C)    if(unscaled) {LDURB_I9(A, B, C);} else {LDRB_U12(A, B, C);}
-#define LDSW(A, B, C)   if(unscaled) {LDURSW_I9(A, B, C);} else {LDRSW_U12(A, B, C);}
-#define LDSHxw(A, B, C) if(unscaled) {LDURSHxw_I9(A, B, C);} else {LDRSHxw_U12(A, B, C);}
-#define LDSHx(A, B, C)  if(unscaled) {LDURSHx_I9(A, B, C);} else {LDRSHx_U12(A, B, C);}
-#define LDSHw(A, B, C)  if(unscaled) {LDURSHw_I9(A, B, C);} else {LDRSHw_U12(A, B, C);}
-#define LDSBxw(A, B, C) if(unscaled) {LDURSBxw_I9(A, B, C);} else {LDRSBxw_U12(A, B, C);}
-#define LDSBx(A, B, C)  if(unscaled) {LDURSBx_I9(A, B, C);} else {LDRSBx_U12(A, B, C);}
-#define LDSBw(A, B, C)  if(unscaled) {LDURSBw_I9(A, B, C);} else {LDRSBw_U12(A, B, C);}
-#define STxw(A, B, C)   if(unscaled) {STURxw_I9(A, B, C);} else {STRxw_U12(A, B, C);}
-#define STz(A, B, C)    if(unscaled) {STURz_I9(A, B, C);} else {STRz_U12(A, B, C);}
-#define STx(A, B, C)    if(unscaled) {STURx_I9(A, B, C);} else {STRx_U12(A, B, C);}
-#define STW(A, B, C)    if(unscaled) {STURw_I9(A, B, C);} else {STRw_U12(A, B, C);}
-#define STH(A, B, C)    if(unscaled) {STURH_I9(A, B, C);} else {STRH_U12(A, B, C);}
-#define STB(A, B, C)    if(unscaled) {STURB_I9(A, B, C);} else {STRB_U12(A, B, C);}
+// Enhanced macros that consider both unscaled and unaligned flags
+#define LDxw(A, B, C)   if(unscaled || dyn->insts[ninst].unaligned) {LDURxw_I9(A, B, C);} else {LDRxw_U12(A, B, C);}
+#define LDz(A, B, C)    if(unscaled || dyn->insts[ninst].unaligned) {LDURz_I9(A, B, C);} else {LDRz_U12(A, B, C);}
+#define LDx(A, B, C)    if(unscaled || dyn->insts[ninst].unaligned) {LDURx_I9(A, B, C);} else {LDRx_U12(A, B, C);}
+#define LDW(A, B, C)    if(unscaled || dyn->insts[ninst].unaligned) {LDURw_I9(A, B, C);} else {LDRw_U12(A, B, C);}
+#define LDH(A, B, C)    if(unscaled || dyn->insts[ninst].unaligned) {LDURH_I9(A, B, C);} else {LDRH_U12(A, B, C);}
+#define LDB(A, B, C)    if(unscaled || dyn->insts[ninst].unaligned) {LDURB_I9(A, B, C);} else {LDRB_U12(A, B, C);}
+#define LDSW(A, B, C)   if(unscaled || dyn->insts[ninst].unaligned) {LDURSW_I9(A, B, C);} else {LDRSW_U12(A, B, C);}
+#define LDSHxw(A, B, C) if(unscaled || dyn->insts[ninst].unaligned) {LDURSHxw_I9(A, B, C);} else {LDRSHxw_U12(A, B, C);}
+#define LDSHx(A, B, C)  if(unscaled || dyn->insts[ninst].unaligned) {LDURSHx_I9(A, B, C);} else {LDRSHx_U12(A, B, C);}
+#define LDSHw(A, B, C)  if(unscaled || dyn->insts[ninst].unaligned) {LDURSHw_I9(A, B, C);} else {LDRSHw_U12(A, B, C);}
+#define LDSBxw(A, B, C) if(unscaled || dyn->insts[ninst].unaligned) {LDURSBxw_I9(A, B, C);} else {LDRSBxw_U12(A, B, C);}
+#define LDSBx(A, B, C)  if(unscaled || dyn->insts[ninst].unaligned) {LDURSBx_I9(A, B, C);} else {LDRSBx_U12(A, B, C);}
+#define LDSBw(A, B, C)  if(unscaled || dyn->insts[ninst].unaligned) {LDURSBw_I9(A, B, C);} else {LDRSBw_U12(A, B, C);}
+#define STxw(A, B, C)   if(unscaled || dyn->insts[ninst].unaligned) {STURxw_I9(A, B, C);} else {STRxw_U12(A, B, C);}
+#define STz(A, B, C)    if(unscaled || dyn->insts[ninst].unaligned) {STURz_I9(A, B, C);} else {STRz_U12(A, B, C);}
+#define STx(A, B, C)    if(unscaled || dyn->insts[ninst].unaligned) {STURx_I9(A, B, C);} else {STRx_U12(A, B, C);}
+#define STW(A, B, C)    if(unscaled || dyn->insts[ninst].unaligned) {STURw_I9(A, B, C);} else {STRw_U12(A, B, C);}
+#define STH(A, B, C)    if(unscaled || dyn->insts[ninst].unaligned) {STURH_I9(A, B, C);} else {STRH_U12(A, B, C);}
+#define STB(A, B, C)    if(unscaled || dyn->insts[ninst].unaligned) {STURB_I9(A, B, C);} else {STRB_U12(A, B, C);}
 
 // STR
 #define STR_gen(size, op1, imm9, op2, Rn, Rt)    ((size)<<30 | 0b111<<27 | (op1)<<24 | 0b00<<22 | (imm9)<<12 | (op2)<<10 | (Rn)<<5 | (Rt))
