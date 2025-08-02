@@ -187,7 +187,6 @@ uintptr_t dynarec64_AVX_66_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             INST_NAME("VPERMILPS Gx, Vx, Ex");
             nextop = F8;
             GETGY_empty_VYEY_xy(v0, v1, v2, 0);
-            u8 = F8;
             d0 = fpu_get_scratch(dyn);
             VANDIxy(d0, v2, 0b11);
             VSHUFxy(W, d0, v1, v1);
@@ -203,11 +202,116 @@ uintptr_t dynarec64_AVX_66_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             VSHUFxy(D, d0, v2, v1);
             VOR_Vxy(v0, d0, d0);
             break;
+        case 0x0E:
+        case 0x0F:
+            if (opcode == 0x0E) {
+                INST_NAME("VTESTPS Gx, Ex");
+            } else {
+                INST_NAME("VTESTPD Gx, Ex");
+            }
+            nextop = F8;
+            SETFLAGS(X_ALL, SF_SET, NAT_FLAGS_NOFUSION);
+            GETGYxy(q0, 0);
+            GETEYxy(q1, 0, 0);
+            if (!cpuext.lbt) {
+                CLEAR_FLAGS(x3);
+            } else IFX (X_ALL) {
+                X64_SET_EFLAGS(xZR, X_ALL);
+            }
+            SET_DFNONE();
+            v0 = fpu_get_scratch(dyn);
+            IFX (X_ZF) {
+                VAND_Vxy(v0, q1, q0);
+                if (opcode == 0x0E) {
+                    VMSKLTZxy(W, v0, v0);
+                } else {
+                    VMSKLTZxy(D, v0, v0);
+                }
+                VSETEQZ_Vxy(fcc0, v0);
+                BCEQZ_MARK(fcc0);
+                if (cpuext.lbt) {
+                    ADDI_D(x3, xZR, 1 << F_ZF);
+                    X64_SET_EFLAGS(x3, X_ZF);
+                } else {
+                    ORI(xFlags, xFlags, 1 << F_ZF);
+                }
+            }
+            MARK;
+            IFX (X_CF) {
+                VANDN_Vxy(v0, q0, q1);
+                if (opcode == 0x0E) {
+                    VMSKLTZxy(W, v0, v0);
+                } else {
+                    VMSKLTZxy(D, v0, v0);
+                }
+                VSETEQZ_Vxy(fcc0, v0);
+                BCEQZ_MARK2(fcc0);
+                if (cpuext.lbt) {
+                    ADDI_D(x3, xZR, 1 << F_CF);
+                    X64_SET_EFLAGS(x3, X_CF);
+                } else {
+                    ORI(xFlags, xFlags, 1 << F_CF);
+                }
+            }
+            MARK2;
+            break;
+        case 0x13:
+            INST_NAME("VCVTPH2PS Gx, Ex");
+            nextop = F8;
+            GETEYSD(v1, 0, 0);
+            GETGYxy_empty(v0);
+            d0 = fpu_get_scratch(dyn);
+            if(vex.l) {
+                XVFCVTH_S_H(d0, v1);
+                XVFCVTL_S_H(v0, v1);
+                XVPERMI_Q(v0, d0, XVPERMI_IMM_4_0(0, 2));
+            } else {
+                VFCVTL_S_H(v0, v1);
+            }
+            break;
         case 0x16:
             INST_NAME("VPERMPS Gx, Vx, Ex");
             nextop = F8;
             GETGY_empty_VYEY_xy(v0, v1, v2, 0);
             XVPERM_W(v0, v2, v1);
+            break;
+        case 0x17:
+            INST_NAME("VPTEST Gx, Ex");
+            nextop = F8;
+            SETFLAGS(X_ALL, SF_SET, NAT_FLAGS_NOFUSION);
+            GETGYxy(q0, 0);
+            GETEYxy(q1, 0, 0);
+            if (!cpuext.lbt) {
+                CLEAR_FLAGS(x3);
+            } else IFX (X_ALL) {
+                X64_SET_EFLAGS(xZR, X_ALL);
+            }
+            SET_DFNONE();
+            v0 = fpu_get_scratch(dyn);
+            IFX (X_ZF) {
+                VAND_Vxy(v0, q1, q0);
+                VSETEQZ_Vxy(fcc0, v0);
+                BCEQZ_MARK(fcc0);
+                if (cpuext.lbt) {
+                    ADDI_D(x3, xZR, 1 << F_ZF);
+                    X64_SET_EFLAGS(x3, X_ZF);
+                } else {
+                    ORI(xFlags, xFlags, 1 << F_ZF);
+                }
+            }
+            MARK;
+            IFX (X_CF) {
+                VANDN_Vxy(v0, q0, q1);
+                VSETEQZ_Vxy(fcc0, v0);
+                BCEQZ_MARK2(fcc0);
+                if (cpuext.lbt) {
+                    ADDI_D(x3, xZR, 1 << F_CF);
+                    X64_SET_EFLAGS(x3, X_CF);
+                } else {
+                    ORI(xFlags, xFlags, 1 << F_CF);
+                }
+            }
+            MARK2;
             break;
         case 0x18:
             INST_NAME("VBROADCASTSS Gx, Ex");
@@ -339,6 +443,12 @@ uintptr_t dynarec64_AVX_66_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             GETGY_empty_VYEY_xy(v0, v1, v2, 0);
             VMULWEVxy(D_W, v0, v1, v2);
             break;
+        case 0x29:
+            INST_NAME("VPCMPEQQ Gx, Vx, Ex");
+            nextop = F8;
+            GETGY_empty_VYEY_xy(v0, v1, v2, 0);
+            VSEQxy(D, v0, v2, v1);
+            break;
         case 0x2B:
             INST_NAME("VPACKUSDW Gx, Vx, Ex");
             nextop = F8;
@@ -346,17 +456,17 @@ uintptr_t dynarec64_AVX_66_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             q0 = fpu_get_scratch(dyn);
             q1 = fpu_get_scratch(dyn);
             d0 = fpu_get_scratch(dyn);
-            VLDIxy(q0, 0b0010011111111); // broadcast 0xff as 16-bit elements to all lanes
+            VLDIxy(d0, (0b10111 <<8) | 0x00);  // Broadcast 0x0000FFFF as 32bits to all lane
             if (v1 == v2) {
-                VMAXIxy(W, v0, v1, 0);
-                VMINxy(W, v0, v1, q0);
-                VPICKEVxy(H, v0, v0, v0);
+                VMAXIxy(W, q0, v1, 0);
+                VMINxy(W, q0, q0, d0);
+                VPICKEVxy(H, v0, q0, q0);
             } else {
                 VMAXIxy(W, q1, v2, 0);
-                VMAXIxy(W, v0, v1, 0);
-                VMINxy(W, q1, q1, q0);
-                VMINxy(W, v0, v0, q0);
-                VPICKEVxy(H, v0, q1, v0);
+                VMAXIxy(W, q0, v1, 0);
+                VMINxy(W, q1, q1, d0);
+                VMINxy(W, q0, q0, d0);
+                VPICKEVxy(H, v0, q1, q0);
             }
             break;
         case 0x2C:
@@ -506,6 +616,12 @@ uintptr_t dynarec64_AVX_66_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             nextop = F8;
             GETGY_empty_VYEY_xy(v0, v1, v2, 0);
             XVPERM_W(v0, v2, v1);
+            break;
+        case 0x37:
+            INST_NAME("VPCMPGTQ Gx, Vx, Ex");
+            nextop = F8;
+            GETGY_empty_VYEY_xy(v0, v1, v2, 0);
+            VSLTxy(D, v0, v2, v1);
             break;
         case 0x38:
             INST_NAME("VPMINSB Gx, Vx, Ex");
@@ -863,7 +979,6 @@ uintptr_t dynarec64_AVX_66_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
                 }
                 VXOR_V(v2, v2, v2);
             }
-            XVPERMI_Q(v0, v2, XVPERMI_IMM_4_0(1, 2));
             break;
         case 0x96:
             INST_NAME("VFMADDSUB132PS/D Gx, Vx, Ex");
@@ -872,7 +987,7 @@ uintptr_t dynarec64_AVX_66_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             q0 = fpu_get_scratch(dyn);
             VFMADDxyxw(q0, v0, v2, v1);
             VFMSUBxyxw(v0, v0, v2, v1);
-            if(rex.w){
+            if (rex.w) {
                 VEXTRINSxy(D, v0, q0, VEXTRINS_IMM_4_0(1, 1));
             } else {
                 VEXTRINSxy(W, v0, q0, VEXTRINS_IMM_4_0(1, 1));
@@ -886,7 +1001,7 @@ uintptr_t dynarec64_AVX_66_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             q0 = fpu_get_scratch(dyn);
             VFMSUBxyxw(q0, v0, v2, v1);
             VFMADDxyxw(v0, v0, v2, v1);
-            if(rex.w){
+            if (rex.w) {
                 VEXTRINSxy(D, v0, q0, VEXTRINS_IMM_4_0(1, 1));
             } else {
                 VEXTRINSxy(W, v0, q0, VEXTRINS_IMM_4_0(1, 1));
@@ -956,7 +1071,7 @@ uintptr_t dynarec64_AVX_66_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             q0 = fpu_get_scratch(dyn);
             VFMADDxyxw(q0, v1, v0, v2);
             VFMSUBxyxw(v0, v1, v0, v2);
-            if(rex.w){
+            if (rex.w) {
                 VEXTRINSxy(D, v0, q0, VEXTRINS_IMM_4_0(1, 1));
             } else {
                 VEXTRINSxy(W, v0, q0, VEXTRINS_IMM_4_0(1, 1));
@@ -970,7 +1085,7 @@ uintptr_t dynarec64_AVX_66_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             q0 = fpu_get_scratch(dyn);
             VFMSUBxyxw(q0, v1, v0, v2);
             VFMADDxyxw(v0, v1, v0, v2);
-            if(rex.w){
+            if (rex.w) {
                 VEXTRINSxy(D, v0, q0, VEXTRINS_IMM_4_0(1, 1));
             } else {
                 VEXTRINSxy(W, v0, q0, VEXTRINS_IMM_4_0(1, 1));
@@ -1040,7 +1155,7 @@ uintptr_t dynarec64_AVX_66_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             q0 = fpu_get_scratch(dyn);
             VFMADDxyxw(q0, v1, v2, v0);
             VFMSUBxyxw(v0, v1, v2, v0);
-            if(rex.w){
+            if (rex.w) {
                 VEXTRINSxy(D, v0, q0, VEXTRINS_IMM_4_0(1, 1));
             } else {
                 VEXTRINSxy(W, v0, q0, VEXTRINS_IMM_4_0(1, 1));
@@ -1054,7 +1169,7 @@ uintptr_t dynarec64_AVX_66_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             q0 = fpu_get_scratch(dyn);
             VFMSUBxyxw(q0, v1, v2, v0);
             VFMADDxyxw(v0, v1, v2, v0);
-            if(rex.w){
+            if (rex.w) {
                 VEXTRINSxy(D, v0, q0, VEXTRINS_IMM_4_0(1, 1));
             } else {
                 VEXTRINSxy(W, v0, q0, VEXTRINS_IMM_4_0(1, 1));

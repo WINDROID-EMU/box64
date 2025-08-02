@@ -223,6 +223,46 @@ uintptr_t dynarec64_AVX_66_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip,
                 SMWRITE2();
             }
             break;
+        case 0x2E:
+            // no special check...
+        case 0x2F:
+            if (opcode == 0x2F) {
+                INST_NAME("VCOMISD Gx, Ex");
+            } else {
+                INST_NAME("VUCOMISD Gx, Ex");
+            }
+            SETFLAGS(X_ALL, SF_SET, NAT_FLAGS_NOFUSION);
+            SET_DFNONE();
+            nextop = F8;
+            GETGYx(d0, 0);
+            GETEYSD(v0, 0, 0);
+
+            CLEAR_FLAGS(x3);
+            // if isnan(d0) || isnan(v0)
+            IFX (X_ZF | X_PF | X_CF) {
+                FCMP_D(fcc0, d0, v0, cUN);
+                BCEQZ_MARK(fcc0);
+                ORI(xFlags, xFlags, (1 << F_ZF) | (1 << F_PF) | (1 << F_CF));
+                B_MARK3_nocond;
+            }
+            MARK;
+            // else if isless(d0, v0)
+            IFX (X_CF) {
+                FCMP_D(fcc1, d0, v0, cLT);
+                BCEQZ_MARK2(fcc1);
+                ORI(xFlags, xFlags, 1 << F_CF);
+                B_MARK3_nocond;
+            }
+            MARK2;
+            // else if d0 == v0
+            IFX (X_ZF) {
+                FCMP_D(fcc2, d0, v0, cEQ);
+                BCEQZ_MARK3(fcc2);
+                ORI(xFlags, xFlags, 1 << F_ZF);
+            }
+            MARK3;
+            SPILL_EFLAGS();
+            break;
         case 0x50:
             nextop = F8;
             INST_NAME("VMOVMSKPD Gd, Ex");
@@ -237,6 +277,23 @@ uintptr_t dynarec64_AVX_66_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip,
             } else {
                 VMSKLTZ_D(d1, v0);
                 VPICKVE2GR_DU(gd, d1, 0);
+            }
+            break;
+        case 0x51:
+            INST_NAME("VSQRTPD Gx, Ex");
+            nextop = F8;
+            GETGY_empty_EY_xy(v0, v1, 0);
+            if (!BOX64ENV(dynarec_fastnan)) {
+                d0 = fpu_get_scratch(dyn);
+                d1 = fpu_get_scratch(dyn);
+                VFCMPxy(D, d0, v1, v1, cEQ);
+                VFSQRTxy(D, v0, v1);
+                VFCMPxy(D, d1, v0, v0, cEQ);
+                VANDN_Vxy(d1, d1, d0);
+                VSLLIxy(D, d1, d1, 63);
+                VOR_Vxy(v0, v0, d1);
+            } else {
+                VFSQRTxy(D, v0, v1);
             }
             break;
         case 0x54:
@@ -299,6 +356,60 @@ uintptr_t dynarec64_AVX_66_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip,
                 VBITSEL_Vxy(v0, v0, d1, d0);
             }
             break;
+        case 0x5A:
+            INST_NAME("CVTPD2PS Gx, Ex");
+            nextop = F8;
+            GETEYxy(v1, 0, 0);
+            GETGYx_empty(v0);
+            if(!BOX64ENV(dynarec_fastround)) {
+                u8 = sse_setround(dyn, ninst, x6, x4);
+            }
+            d0 = fpu_get_scratch(dyn);
+            if(vex.l) {
+                XVXOR_V(d0, d0, d0);
+                XVFCVT_S_D(v0, d0, v1);
+                XVPERMI_D(v0, v0, 0b11011000);
+            } else {
+                VFCVT_S_D(d0, v1, v1);
+                XVPICKVE_D(v0, d0, 0);
+                YMM_UNMARK_UPPER_ZERO(v0);
+            }
+            if(!BOX64ENV(dynarec_fastround)) {
+                x87_restoreround(dyn, ninst, u8);
+            }
+            break;
+        case 0x5B:
+            INST_NAME("VCVTPS2DQ Gx, Ex");
+            nextop = F8;
+            GETGY_empty_EY_xy(v0, v1, 0);
+            u8 = sse_setround(dyn, ninst, x6, x4);
+            if(vex.l){
+                d1 = fpu_get_scratch(dyn);
+                XVFTINT_W_S(d1, v1);
+                if (!BOX64ENV(dynarec_fastround)) {
+                    q0 = fpu_get_scratch(dyn);
+                    q1 = fpu_get_scratch(dyn); // mask
+                    d0 = fpu_get_scratch(dyn);
+                    XVLDI(q0, 0b1001110000000); // broadcast 0x80000000 to all
+                    XVLDI(d0, (0b10011 << 8) | 0x4f);
+                    XVFCMP_S(q1, d0, v1, cULE); // get Nan,+overflow mark
+                    XVBITSEL_V(v0, d1, q0, q1);
+                }
+            } else {
+                d1 = fpu_get_scratch(dyn);
+                VFTINT_W_S(d1, v1);
+                if (!BOX64ENV(dynarec_fastround)) {
+                    q0 = fpu_get_scratch(dyn);
+                    q1 = fpu_get_scratch(dyn); // mask
+                    d0 = fpu_get_scratch(dyn);
+                    VLDI(q0, 0b1001110000000); // broadcast 0x80000000 to all
+                    VLDI(d0, (0b10011 << 8) | 0x4f);
+                    VFCMP_S(q1, d0, v1, cULE); // get Nan,+overflow mark
+                    VBITSEL_V(v0, d1, q0, q1);
+                }
+            }
+            x87_restoreround(dyn, ninst, u8);
+            break;
         case 0x5C:
             INST_NAME("VSUBPD Gx, Vx, Ex");
             nextop = F8;
@@ -317,6 +428,19 @@ uintptr_t dynarec64_AVX_66_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip,
                 VBITSEL_Vxy(v0, v0, d1, d0);
             }
             break;
+        case 0x5D:
+            INST_NAME("VMINPD Gx, Vx, Ex");
+            nextop = F8;
+            GETGY_empty_VYEY_xy(v0, v1, v2, 0);
+            if (BOX64ENV(dynarec_fastnan)) {
+                VFMINxy(D, v0, v2, v1);
+            } else {
+                q0 = fpu_get_scratch(dyn);
+                q1 = fpu_get_scratch(dyn);
+                VFCMPxy(D, q0, v2, v1, cULE);
+                VBITSEL_Vxy(v0, v1, v2, q0);
+            }
+            break;
         case 0x5E:
             INST_NAME("VDIVPD Gx, Vx, Ex");
             nextop = F8;
@@ -333,6 +457,19 @@ uintptr_t dynarec64_AVX_66_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip,
                 VLDIxy(d1, (0b011 << 9) | 0b111111000);
                 VSLLIxy(D, d1, d1, 48); // broadcast 0xfff8000000000000
                 VBITSEL_Vxy(v0, v0, d1, d0);
+            }
+            break;
+        case 0x5F:
+            INST_NAME("VMAXPD Gx, Vx, Ex");
+            nextop = F8;
+            GETGY_empty_VYEY_xy(v0, v1, v2, 0);
+            if (BOX64ENV(dynarec_fastnan)) {
+                VFMAXxy(D, v0, v2, v1);
+            } else {
+                q0 = fpu_get_scratch(dyn);
+                q1 = fpu_get_scratch(dyn);
+                VFCMPxy(D, q0, v2, v1, cLT);
+                VBITSEL_Vxy(v0, v2, v1, q0);
             }
             break;
         case 0x60:
@@ -366,6 +503,24 @@ uintptr_t dynarec64_AVX_66_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip,
                 VSATxy(H, v0, v1, 7);
                 VPICKEVxy(B, v0, q0, v0);
             }
+            break;
+        case 0x64:
+            INST_NAME("VPCMPGTB Gx, Vx, Ex");
+            nextop = F8;
+            GETGY_empty_VYEY_xy(v0, v1, v2, 0);
+            VSLTxy(B, v0, v2, v1);
+            break;
+        case 0x65:
+            INST_NAME("VPCMPGTW Gx, Vx, Ex");
+            nextop = F8;
+            GETGY_empty_VYEY_xy(v0, v1, v2, 0);
+            VSLTxy(H, v0, v2, v1);
+            break;
+        case 0x66:
+            INST_NAME("VPCMPGTD Gx, Vx, Ex");
+            nextop = F8;
+            GETGY_empty_VYEY_xy(v0, v1, v2, 0);
+            VSLTxy(W, v0, v2, v1);
             break;
         case 0x67:
             INST_NAME("VPACKUSWB Gx, Vx, Ex");
@@ -603,6 +758,24 @@ uintptr_t dynarec64_AVX_66_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip,
                     DEFAULT;
             }
             break;
+        case 0x74:
+            INST_NAME("VPCMPEQB Gx, Vx, Ex");
+            nextop = F8;
+            GETGY_empty_VYEY_xy(v0, v1, v2, 0);
+            VSEQxy(B, v0, v1, v2);
+            break;
+        case 0x75:
+            INST_NAME("VPCMPEQW Gx, Vx, Ex");
+            nextop = F8;
+            GETGY_empty_VYEY_xy(v0, v1, v2, 0);
+            VSEQxy(H, v0, v1, v2);
+            break;
+        case 0x76:
+            INST_NAME("VPCMPEQD Gx, Vx, Ex");
+            nextop = F8;
+            GETGY_empty_VYEY_xy(v0, v1, v2, 0);
+            VSEQxy(W, v0, v1, v2);
+            break;
         case 0x7C:
             INST_NAME("VHADDPD Gx, Vx, Ex");
             nextop = F8;
@@ -654,7 +827,7 @@ uintptr_t dynarec64_AVX_66_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip,
                 if (rex.w) {
                     VPICKVE2GR_D(ed, v0, 0);
                 } else {
-                    VPICKVE2GR_W(ed, v0, 0);
+                    VPICKVE2GR_WU(ed, v0, 0);
                 }
             } else {
                 addr = geted(dyn, addr, ninst, nextop, &ed, x2, x1, &fixedaddress, rex, NULL, 1, 0);
@@ -685,6 +858,30 @@ uintptr_t dynarec64_AVX_66_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip,
                     VST(q0, ed, fixedaddress);
                 }
                 SMWRITE2();
+            }
+            break;
+        case 0xC2:
+            INST_NAME("VCMPPD Gx, Vx, Ex, Ib");
+            nextop = F8;
+            GETGY_empty_VYEY_xy(v0, v1, v2, 1);
+            u8 = F8;
+            switch (u8 & 0xf) {
+                case 0x00: VFCMPxy(D, v0, v1, v2, cEQ); break;  // Equal, not unordered
+                case 0x01: VFCMPxy(D, v0, v1, v2, cLT); break;  // Less than
+                case 0x02: VFCMPxy(D, v0, v1, v2, cLE); break;  // Less or equal
+                case 0x03: VFCMPxy(D, v0, v1, v2, cUN); break;  // unordered
+                case 0x04: VFCMPxy(D, v0, v1, v2, cUNE); break; // Not Equal (or unordered on ARM, not on X86...)
+                case 0x05: VFCMPxy(D, v0, v2, v1, cULE); break; // Greater or equal or unordered
+                case 0x06: VFCMPxy(D, v0, v2, v1, cULT); break; // Greater or unordered
+                case 0x07: VFCMPxy(D, v0, v1, v2, cOR); break;  // Greater or unordered
+                case 0x08: VFCMPxy(D, v0, v1, v2, cUEQ); break; // Equal, or unordered
+                case 0x09: VFCMPxy(D, v0, v1, v2, cULT); break; // Less than or unordered
+                case 0x0a: VFCMPxy(D, v0, v1, v2, cULE); break; // Less or equal or unordered
+                case 0x0b: XVXOR_V(v0, v0, v0); break;          // false
+                case 0x0c: VFCMPxy(D, v0, v1, v2, cNE); break;  // Not Eual, ordered
+                case 0x0d: VFCMPxy(D, v0, v2, v1, cLE); break;  // Greater or Equal ordered
+                case 0x0e: VFCMPxy(D, v0, v2, v1, cLT); break;  // Greater ordered
+                case 0x0f: VSEQxy(B, v0, v1, v1); break;        // true
             }
             break;
         case 0xC6:
@@ -901,6 +1098,47 @@ uintptr_t dynarec64_AVX_66_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip,
             nextop = F8;
             GETGY_empty_VYEY_xy(v0, v1, v2, 0);
             VMUHxy(H, v0, v1, v2);
+            break;
+        case 0xE6:
+            INST_NAME("VCVTTPD2DQ Gx, Ex");
+            nextop = F8;
+            GETEYxy(v1, 0, 0);
+            GETGYx_empty(v0);
+            d0 = fpu_get_scratch(dyn);
+            d1 = fpu_get_scratch(dyn);
+            if(vex.l){
+                XVXOR_V(d0, d0, d0);
+                XVFTINTRZ_W_D(d1, d0, v1);       // v0 [lo0, lo1, --, --, hi0, hi1, --, -- ]
+                if (!BOX64ENV(dynarec_fastround)) {
+                    q0 = fpu_get_scratch(dyn);
+                    q1 = fpu_get_scratch(dyn);
+                    XVLDI(q0, 0b1001110000000); // broadcast 0x80000000 to all
+                    /*
+                        VCVTTPD2DQ has default rounding mode RZ
+                        so we could combine +-NAN +overflow to xvfcmp.cule 0x41e0000000000000
+                    */
+                    LU52I_D(x5, xZR, 0x41e);
+                    XVREPLGR2VR_D(q1, x5);       
+                    XVFCMP_D(d0, q1, v1, cULE); // get Nan mask
+                    XVSRLNI_W_D(d0, d0, 0);
+                    XVBITSEL_V(v0, d1, q0, d0);
+                }
+                XVPERMI_D(v0, v0, 0b11011000);
+            }else{
+                VFTINTRZ_W_D(d0, v1, v1);
+                if (!BOX64ENV(dynarec_fastround)) {
+                    q0 = fpu_get_scratch(dyn);
+                    q1 = fpu_get_scratch(dyn);
+                    XVLDI(q0, 0b1001110000000); // broadcast 0x80000000 to all
+                    LU52I_D(x5, xZR, 0x41e);
+                    XVREPLGR2VR_D(q1, x5);       
+                    XVFCMP_D(q1, q1, v1, cULE); // get Nan mask
+                    VSHUF4I_W(q1, q1, 0b11011000);
+                    VBITSEL_V(d0, d0, q0, q1);
+                }
+                XVPICKVE_D(v0, d0, 0);
+                YMM_UNMARK_UPPER_ZERO(v0);
+            }
             break;
         case 0xE7:
             INST_NAME("VMOVNTDQ Ex, Gx");

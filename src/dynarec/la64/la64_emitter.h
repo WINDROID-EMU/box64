@@ -1235,6 +1235,10 @@ LSX instruction starts with V, LASX instruction starts with XV.
 #define VBITCLR_H(vd, vj, vk)        EMIT(type_3R(0b01110001000011001, vk, vj, vd))
 #define VBITCLR_W(vd, vj, vk)        EMIT(type_3R(0b01110001000011010, vk, vj, vd))
 #define VBITCLR_D(vd, vj, vk)        EMIT(type_3R(0b01110001000011011, vk, vj, vd))
+#define VBITCLRI_B(vd, vj, imm3)     EMIT(type_2RI3(0b0111001100010000001, imm3, vj, vd))
+#define VBITCLRI_H(vd, vj, imm4)     EMIT(type_2RI4(0b011100110001000001, imm4, vj, vd))
+#define VBITCLRI_W(vd, vj, imm5)     EMIT(type_2RI5(0b01110011000100001, imm5, vj, vd))
+#define VBITCLRI_D(vd, vj, imm6)     EMIT(type_2RI6(0b0111001100010001, imm6, vj, vd))
 #define VBITSET_B(vd, vj, vk)        EMIT(type_3R(0b01110001000011100, vk, vj, vd))
 #define VBITSET_H(vd, vj, vk)        EMIT(type_3R(0b01110001000011101, vk, vj, vd))
 #define VBITSET_W(vd, vj, vk)        EMIT(type_3R(0b01110001000011110, vk, vj, vd))
@@ -1266,8 +1270,12 @@ LSX instruction starts with V, LASX instruction starts with XV.
 #define VFSQRT_D(vd, vj)             EMIT(type_2R(0b0111001010011100111010, vj, vd))
 #define VFRECIP_S(vd, vj)            EMIT(type_2R(0b0111001010011100111101, vj, vd))
 #define VFRECIP_D(vd, vj)            EMIT(type_2R(0b0111001010011100111110, vj, vd))
+#define VFRECIPE_S(vd, vj)           EMIT(type_2R(0b0111001010011101000101, vj, vd))
+#define VFRECIPE_D(vd, vj)           EMIT(type_2R(0b0111001010011101000110, vj, vd))
 #define VFRSQRT_S(vd, vj)            EMIT(type_2R(0b0111001010011101000001, vj, vd))
 #define VFRSQRT_D(vd, vj)            EMIT(type_2R(0b0111001010011101000010, vj, vd))
+#define VFRSQRTE_S(vd, vj)           EMIT(type_2R(0b0111001010011101001001, vj, vd))
+#define VFRSQRTE_D(vd, vj)           EMIT(type_2R(0b0111001010011101001010, vj, vd))
 #define VFCVTL_S_H(vd, vj)           EMIT(type_2R(0b0111001010011101111010, vj, vd))
 #define VFCVTH_S_H(vd, vj)           EMIT(type_2R(0b0111001010011101111011, vj, vd))
 #define VFCVTL_D_S(vd, vj)           EMIT(type_2R(0b0111001010011101111100, vj, vd))
@@ -1732,16 +1740,16 @@ LSX instruction starts with V, LASX instruction starts with XV.
 #define XVMSKLTZ_D(xd, xj)           EMIT(type_2R(0b0111011010011100010011, xj, xd))
 #define XVMSKGEZ_B(xd, xj)           EMIT(type_2R(0b0111011010011100010100, xj, xd))
 #define XVMSKNZ_B(xd, xj)            EMIT(type_2R(0b0111011010011100011000, xj, xd))
-#define XVSETEQZ_V(cd, xj)           EMIT(type_2R(0b011101101001110010011000, xj, cd & 0b111))
-#define XVSETNEZ_V(cd, xj)           EMIT(type_2R(0b011101101001110010011100, xj, cd & 0b111))
-#define XVSETANYEQZ_B(cd, xj)        EMIT(type_2R(0b011101101001110010100000, xj, cd & 0b111))
-#define XVSETANYEQZ_H(cd, xj)        EMIT(type_2R(0b011101101001110010100100, xj, cd & 0b111))
-#define XVSETANYEQZ_W(cd, xj)        EMIT(type_2R(0b011101101001110010101000, xj, cd & 0b111))
-#define XVSETANYEQZ_D(cd, xj)        EMIT(type_2R(0b011101101001110010101100, xj, cd & 0b111))
-#define XVSETALLNEZ_B(cd, xj)        EMIT(type_2R(0b011101101001110010110000, xj, cd & 0b111))
-#define XVSETALLNEZ_H(cd, xj)        EMIT(type_2R(0b011101101001110010110100, xj, cd & 0b111))
-#define XVSETALLNEZ_W(cd, xj)        EMIT(type_2R(0b011101101001110010111000, xj, cd & 0b111))
-#define XVSETALLNEZ_D(cd, xj)        EMIT(type_2R(0b011101101001110010111100, xj, cd & 0b111))
+#define XVSETEQZ_V(cd, xj)           EMIT(type_2R(0b0111011010011100100110, xj, cd & 0b111))
+#define XVSETNEZ_V(cd, xj)           EMIT(type_2R(0b0111011010011100100111, xj, cd & 0b111))
+#define XVSETANYEQZ_B(cd, xj)        EMIT(type_2R(0b0111011010011100101000, xj, cd & 0b111))
+#define XVSETANYEQZ_H(cd, xj)        EMIT(type_2R(0b0111011010011100101001, xj, cd & 0b111))
+#define XVSETANYEQZ_W(cd, xj)        EMIT(type_2R(0b0111011010011100101010, xj, cd & 0b111))
+#define XVSETANYEQZ_D(cd, xj)        EMIT(type_2R(0b0111011010011100101011, xj, cd & 0b111))
+#define XVSETALLNEZ_B(cd, xj)        EMIT(type_2R(0b0111011010011100101100, xj, cd & 0b111))
+#define XVSETALLNEZ_H(cd, xj)        EMIT(type_2R(0b0111011010011100101101, xj, cd & 0b111))
+#define XVSETALLNEZ_W(cd, xj)        EMIT(type_2R(0b0111011010011100101110, xj, cd & 0b111))
+#define XVSETALLNEZ_D(cd, xj)        EMIT(type_2R(0b0111011010011100101111, xj, cd & 0b111))
 #define XVFLOGB_S(xd, xj)            EMIT(type_2R(0b0111011010011100110001, xj, xd))
 #define XVFLOGB_D(xd, xj)            EMIT(type_2R(0b0111011010011100110010, xj, xd))
 #define XVFCLASS_S(xd, xj)           EMIT(type_2R(0b0111011010011100110101, xj, xd))
@@ -1792,6 +1800,8 @@ LSX instruction starts with V, LASX instruction starts with XV.
 #define XVFRINTRZ_D(xd, xj)          EMIT(type_2R(0b0111011010011101011010, xj, xd))
 #define XVFRINTRNE_S(xd, xj)         EMIT(type_2R(0b0111011010011101011101, xj, xd))
 #define XVFRINTRNE_D(xd, xj)         EMIT(type_2R(0b0111011010011101011110, xj, xd))
+#define XVFRINTRRD_S(vd, vj, rm)     EMIT(type_2RI4(0b011101101001110101, ((rm & 0b11) << 2) | 0b01, vj, vd))
+#define XVFRINTRRD_D(vd, vj, rm)     EMIT(type_2RI4(0b011101101001110101, ((rm & 0b11) << 2) | 0b10, vj, vd))
 #define XVFCVTL_S_H(xd, xj)          EMIT(type_2R(0b0111011010011101111010, xj, xd))
 #define XVFCVTH_S_H(xd, xj)          EMIT(type_2R(0b0111011010011101111011, xj, xd))
 #define XVFCVTL_D_S(xd, xj)          EMIT(type_2R(0b0111011010011101111100, xj, xd))
@@ -1908,6 +1918,15 @@ LSX instruction starts with V, LASX instruction starts with XV.
 #define XVSRLNI_H_W(vd, vj, imm5)    EMIT(type_2RI5(0b01110111010000001, imm5, vj, vd))
 #define XVSRLI_W(vd, vj, imm5)       EMIT(type_2RI5(0b01110111001100001, imm5, vj, vd))
 #define VSETEQZ_V(cd, vj)            EMIT(type_2R(0b0111001010011100100110, vj, cd & 0b111))
+#define VSETNEZ_V(cd, vj)            EMIT(type_2R(0b0111001010011100100111, vj, cd & 0b111))
+#define VSETANYEQZ_B(cd, vj)         EMIT(type_2R(0b0111001010011100101000, vj, cd & 0b111))
+#define VSETANYEQZ_H(cd, vj)         EMIT(type_2R(0b0111001010011100101001, vj, cd & 0b111))
+#define VSETANYEQZ_W(cd, vj)         EMIT(type_2R(0b0111001010011100101010, vj, cd & 0b111))
+#define VSETANYEQZ_D(cd, vj)         EMIT(type_2R(0b0111001010011100101011, vj, cd & 0b111))
+#define VSETALLNEZ_B(cd, vj)         EMIT(type_2R(0b0111001010011100101100, vj, cd & 0b111))
+#define VSETALLNEZ_H(cd, vj)         EMIT(type_2R(0b0111001010011100101101, vj, cd & 0b111))
+#define VSETALLNEZ_W(cd, vj)         EMIT(type_2R(0b0111001010011100101110, vj, cd & 0b111))
+#define VSETALLNEZ_D(cd, vj)         EMIT(type_2R(0b0111001010011100101111, vj, cd & 0b111))
 #define VINSGR2VR_B(vd, rj, imm4)    EMIT(type_2RI4(0b011100101110101110, imm4, rj, vd))
 #define VINSGR2VR_H(vd, rj, imm3)    EMIT(type_2RI3(0b0111001011101011110, imm3, rj, vd))
 #define VINSGR2VR_W(vd, rj, imm2)    EMIT(type_2RI2(0b01110010111010111110, imm2, rj, vd))
@@ -3206,6 +3225,69 @@ LSX instruction starts with V, LASX instruction starts with XV.
         }                               \
     } while (0)
 
+#define VFRECIPxy(width, vd, vj)      \
+    do {                              \
+        if (vex.l) {                  \
+            XVFRECIP_##width(vd, vj); \
+        } else {                      \
+            VFRECIP_##width(vd, vj);  \
+        }                             \
+    } while (0)
+
+#define VFRECIPExy(width, vd, vj)      \
+    do {                               \
+        if (vex.l) {                   \
+            XVFRECIPE_##width(vd, vj); \
+        } else {                       \
+            VFRECIPE_##width(vd, vj);  \
+        }                              \
+    } while (0)
+
+#define VFRSQRTxy(width, vd, vj)      \
+    do {                              \
+        if (vex.l) {                  \
+            XVFRSQRT_##width(vd, vj); \
+        } else {                      \
+            VFRSQRT_##width(vd, vj);  \
+        }                             \
+    } while (0)
+
+#define VFRSQRTExy(width, vd, vj)      \
+    do {                               \
+        if (vex.l) {                   \
+            XVFRSQRTE_##width(vd, vj); \
+        } else {                       \
+            VFRSQRTE_##width(vd, vj);  \
+        }                              \
+    } while (0)
+
+#define VFSQRTxy(width, vd, vj)      \
+    do {                             \
+        if (vex.l) {                 \
+            XVFSQRT_##width(vd, vj); \
+        } else {                     \
+            VFSQRT_##width(vd, vj);  \
+        }                            \
+    } while (0)
+
+#define VFMAXxy(width, vd, vj, vk)      \
+    do {                                \
+        if (vex.l) {                    \
+            XVFMAX_##width(vd, vj, vk); \
+        } else {                        \
+            VFMAX_##width(vd, vj, vk);  \
+        }                               \
+    } while (0)
+
+#define VFMINxy(width, vd, vj, vk)      \
+    do {                                \
+        if (vex.l) {                    \
+            XVFMIN_##width(vd, vj, vk); \
+        } else {                        \
+            VFMIN_##width(vd, vj, vk);  \
+        }                               \
+    } while (0)
+
 #define VREPLVEIxy(width, vd, vj, imm)         \
     do {                                       \
         if (vex.l) {                           \
@@ -3213,10 +3295,65 @@ LSX instruction starts with V, LASX instruction starts with XV.
                 ADDI_D(x5, xZR, imm);          \
                 XVREPLVE_##width(vd, vj, x5);  \
             } else {                           \
-                XVREPLVE0_##width(vd, vj); \
+                XVREPLVE_##width(vd, vj, xZR); \
             }                                  \
         } else {                               \
             VREPLVEI_##width(vd, vj, imm);     \
         }                                      \
     } while (0)
-#endif //__ARM64_EMITTER_H__
+
+#define VSEQxy(width, vd, vj, vk)      \
+    do {                               \
+        if (vex.l) {                   \
+            XVSEQ_##width(vd, vj, vk); \
+        } else {                       \
+            VSEQ_##width(vd, vj, vk);  \
+        }                              \
+    } while (0)
+
+#define VSLTxy(width, vd, vj, vk)      \
+    do {                               \
+        if (vex.l) {                   \
+            XVSLT_##width(vd, vj, vk); \
+        } else {                       \
+            VSLT_##width(vd, vj, vk);  \
+        }                              \
+    } while (0)
+
+#define VSETEQZ_Vxy(fcc, vd)     \
+    do {                         \
+        if (vex.l) {             \
+            XVSETEQZ_V(fcc, vd); \
+        } else {                 \
+            VSETEQZ_V(fcc, vd);  \
+        }                        \
+    } while (0)
+
+#define VSETNEZ_Vxy(fcc, vd)     \
+    do {                         \
+        if (vex.l) {             \
+            XVSETNEZ_V(fcc, vd); \
+        } else {                 \
+            VSETNEZ_V(fcc, vd);  \
+        }                        \
+    } while (0)
+
+#define VBITCLRIxy(width, vd, vj, imm)      \
+    do {                                    \
+        if (vex.l) {                        \
+            XVBITCLRI_##width(vd, vj, imm); \
+        } else {                            \
+            VBITCLRI_##width(vd, vj, imm);  \
+        }                                   \
+    } while (0)
+
+#define VMSKLTZxy(width, vd, vj)      \
+    do {                              \
+        if (vex.l) {                  \
+            XVMSKLTZ_##width(vd, vj); \
+        } else {                      \
+            VMSKLTZ_##width(vd, vj);  \
+        }                             \
+    } while (0)
+
+#endif //__LA64_EMITTER_H__

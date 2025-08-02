@@ -53,7 +53,14 @@ uintptr_t dynarec64_AVX_66_0F3A(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
     MAYUSE(s0);
     MAYUSE(j64);
     MAYUSE(cacheupd);
-
+#if STEP > 1
+    static const int8_t round_round[] = {
+        0x3, // round to nearest with ties to even
+        0x0, // round toward minus infinity
+        0x1, // round toward plus infinity
+        0x2  // round toward zero
+    };
+#endif
     rex_t rex = vex.rex;
 
     switch (opcode) {
@@ -133,8 +140,8 @@ uintptr_t dynarec64_AVX_66_0F3A(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             }
             nextop = F8;
             if (!vex.l) EMIT(0);
-            u8 = F8;
             GETGY_empty_VYEY_xy(v0, v1, v2, 1);
+            u8 = F8;
             if (u8 == 0x88) {
                 XVXOR_V(v0, v0, v0);
                 break;
@@ -165,6 +172,84 @@ uintptr_t dynarec64_AVX_66_0F3A(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
                 XVORI_B(v0, vec_lo ? v2 : v1, 0);
                 XVPERMI_Q(v0, d0, XVPERMI_IMM_4_0(0, 2 + index_lo));
             }
+            break;
+        case 0x08:
+            INST_NAME("VROUNDPS Gx, Ex, Ib");
+            nextop = F8;
+            GETGY_empty_EY_xy(v0, v1, 1);
+            u8 = F8;
+            if (u8 & 4) {
+                u8 = sse_setround(dyn, ninst, x1, x2);
+                if(vex.l) {
+                    XVFRINT_S(v0, v1);
+                } else {
+                    VFRINT_S(v0, v1);
+                }
+                x87_restoreround(dyn, ninst, u8);
+            } else {
+                if(vex.l) {
+                    XVFRINTRRD_S(v0, v1, round_round[u8 & 3]);
+                } else {
+                    VFRINTRRD_S(v0, v1, round_round[u8 & 3]);
+                }
+            }
+            break;
+        case 0x09:
+            INST_NAME("VROUNDPD Gx, Ex, Ib");
+            nextop = F8;
+            GETGY_empty_EY_xy(v0, v1, 1);
+            u8 = F8;
+            if (u8 & 4) {
+                u8 = sse_setround(dyn, ninst, x1, x2);
+                if(vex.l) {
+                    XVFRINT_D(v0, v1);
+                } else {
+                    VFRINT_D(v0, v1);
+                }
+                x87_restoreround(dyn, ninst, u8);
+            } else {
+                if(vex.l) {
+                    XVFRINTRRD_D(v0, v1, round_round[u8 & 3]);
+                } else {
+                    VFRINTRRD_D(v0, v1, round_round[u8 & 3]);
+                }
+            }
+            break;
+        case 0x0A:
+            INST_NAME("VROUNDSS Gx, Vx, Ex, Ib");
+            nextop = F8;
+            GETEYSS(v2, 0, 1);
+            GETVYx(v1, 0);
+            GETGYx_empty(v0);
+            u8 = F8;
+            d0 = fpu_get_scratch(dyn);
+            if (u8 & 4) {
+                u8 = sse_setround(dyn, ninst, x1, x2);
+                VFRINT_S(d0, v2);
+                x87_restoreround(dyn, ninst, u8);
+            } else {
+                VFRINTRRD_S(d0, v2, round_round[u8 & 3]);
+            }
+            if(v0 != v1) VOR_V(v0, v1, v1);
+            VEXTRINS_W(v0, d0, 0);
+            break;
+        case 0x0B:
+            INST_NAME("VROUNDSD Gx, Vx, Ex, Ib");
+            nextop = F8;
+            GETEYSD(v2, 0, 1);
+            GETVYx(v1, 0);
+            GETGYx_empty(v0);
+            u8 = F8;
+            d0 = fpu_get_scratch(dyn);
+            if (u8 & 4) {
+                u8 = sse_setround(dyn, ninst, x1, x2);
+                VFRINT_D(d0, v2);
+                x87_restoreround(dyn, ninst, u8);
+            } else {
+                VFRINTRRD_D(d0, v2, round_round[u8 & 3]);
+            }
+            if(v0 != v1) VOR_V(v0, v1, v1);
+            VEXTRINS_D(v0, d0, 0);
             break;
         case 0x0D:
             INST_NAME("VBLENDPD Gx, Vx, Ex, Ib");
@@ -211,7 +296,7 @@ uintptr_t dynarec64_AVX_66_0F3A(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
                 XVPERMI_Q(d0, d1, XVPERMI_IMM_4_0(1, 2));
                 XVOR_V(v0, d0, d0);
             } else {
-                u8 = F8 & 0b11;
+                u8 = u8 & 0b11;
                 switch (u8) {
                     case 0b00:
                         VOR_V(v0, v1, v1);
@@ -326,8 +411,12 @@ uintptr_t dynarec64_AVX_66_0F3A(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             nextop = F8;
             GETGY_empty_VYEY_xy(q0, q1, q2, 1);
             u8 = F8;
-            XVOR_V(q0, q1, q1);
-            XVPERMI_Q(q0, q2, (u8 & 1) == 0 ? 0b00110000 : 0b00000010);
+            if(q0 != q2){
+                if(q0 != q1) XVOR_V(q0, q1, q1);
+                XVPERMI_Q(q0, q2, ((u8 & 1) == 0) ? 0x30: 0x02);
+            } else{
+                XVPERMI_Q(q0, q1, ((u8 & 1) == 0) ? 0x12 : 0x20);
+            }
             break;
         case 0x19:
         case 0x39:
@@ -350,12 +439,41 @@ uintptr_t dynarec64_AVX_66_0F3A(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
                 }
             }
             break;
+        case 0x1D:
+            INST_NAME("VCVTPS2PH Ex, Gx, Ib");
+            nextop = F8;
+            GETGYxy(v0, 0);
+            if(vex.l) {
+                GETEYx(v1, 1, 1);
+            } else {
+                GETEYSD(v1, 1, 1);
+            }
+            u8 = F8;
+            d0 = fpu_get_scratch(dyn);
+            if (u8 & 4) {
+                u8 = sse_setround(dyn, ninst, x1, x2);
+            } else {
+                MOVFCSR2GR(x4, FCSR3);
+                ORI(x5, x5, round_round[u8&3]);
+                SLLI_D(x5, x5, 8);
+                MOVGR2FCSR(FCSR3, x5);
+                u8 = x4;
+            }
+            if(vex.l){
+                XVXOR_V(d0, d0, d0);
+                XVFCVT_H_S(v1, d0, v0);
+                XVPERMI_D(v1, v1, 0b11011000);
+                PUTEYx(v1);
+            } else {
+                XVXOR_V(d0, d0, d0);
+                VFCVT_H_S(v1, d0, v0);
+                PUTEYSD(v1);
+            }
+            x87_restoreround(dyn, ninst, u8);
+            break;
         case 0x21:
             INST_NAME("VINSERTPS Gx, Vx, Ex, Ib");
             nextop = F8;
-            uint8_t src_index = (u8 >> 6) & 3;
-            uint8_t dst_index = (u8 >> 4) & 3;
-            uint8_t zmask = u8 & 0xf;
             q1 = fpu_get_scratch(dyn);
             if (MODREG) {
                 GETGY_empty_VYEY_xy(v0, v1, v2, 1);
@@ -363,24 +481,24 @@ uintptr_t dynarec64_AVX_66_0F3A(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
                 if (v0 == v2) {
                     VOR_V(q1, v2, v2);
                     if (v0 != v1) VOR_V(v0, v1, v1);
-                    VEXTRINS_W(v0, q1, VEXTRINS_IMM_4_0(dst_index, src_index));
+                    VEXTRINS_W(v0, q1, VEXTRINS_IMM_4_0((u8 >> 4) & 3, (u8 >> 6) & 3));
                 } else {
                     if (v0 != v1) VOR_V(v0, v1, v1);
-                    VEXTRINS_W(v0, v2, VEXTRINS_IMM_4_0(dst_index, src_index));
+                    VEXTRINS_W(v0, v2, VEXTRINS_IMM_4_0((u8 >> 4) & 3, (u8 >> 6) & 3));
                 }
             } else {
                 GETVYx(v1, 0);
                 GETGYx_empty(v0);
-                u8 = F8;
                 if (v0 != v1) VOR_V(v0, v1, v1);
                 SMREAD();
-                addr = geted(dyn, addr, ninst, nextop, &wback, x3, x5, &fixedaddress, rex, NULL, 0, 1);
+                addr = geted(dyn, addr, ninst, nextop, &wback, x3, x5, &fixedaddress, rex, NULL, 1, 1);
                 u8 = F8;
                 FLD_S(q1, wback, fixedaddress);
-                VEXTRINS_W(v0, q1, VEXTRINS_IMM_4_0(dst_index, 0)); // src index is zero when Ex is mem operand
+                VEXTRINS_W(v0, q1, VEXTRINS_IMM_4_0((u8 >> 4) & 3, 0)); // src index is zero when Ex is mem operand
             }
-            VXOR_V(q1, q1, q1);
+            uint8_t zmask = u8 & 0xf;
             if (zmask) {
+                VXOR_V(q1, q1, q1);
                 for (uint8_t i = 0; i < 4; i++) {
                     if (zmask & (1 << i)) {
                         VEXTRINS_W(v0, q1, VEXTRINS_IMM_4_0(i, 0));
