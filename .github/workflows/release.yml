@@ -3,6 +3,7 @@ name: Build and Release Box64
 
 permissions:
   actions: 'write'
+  contents: 'write'
 
 on:
   workflow_dispatch:
@@ -37,63 +38,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [X64, RISCV, RK3588, ARM64, ANDROID, TERMUX, LARCH64, PPC64LE, ANDROID_GLIBC, WOW64]
-        type: [Release, Trace, StaticBuild, Box32]
-        exclude:
-          - platform: ANDROID
-            type: StaticBuild
-          - platform: TERMUX
-            type: StaticBuild
-          - platform: X64
-            type: StaticBuild
-          - platform: ANDROID
-            type: Box32
-          - platform: TERMUX
-            type: Box32
-          - platform: WOW64
-            type: Trace
-          - platform: WOW64
-            type: StaticBuild
-          - platform: WOW64
-            type: Box32
-          - platform: ANDROID
-            type: Trace
-          - platform: TERMUX
-            type: Trace
-          - platform: LARCH64
-            type: Trace
-          - platform: PPC64LE
-            type: Trace
+        platform: [ANDROID]
+        type: [Release]
         include:
-          - platform: X64
-            os: ubuntu-latest
-
-          - platform: RISCV
-            os: ubuntu-latest
-
-          - platform: RK3588
-            os: ubuntu-22.04-arm
-
-          - platform: ARM64
-            os: ubuntu-22.04-arm
-
           - platform: ANDROID
             os: ubuntu-latest
-
-          - platform: TERMUX
-            os: ubuntu-latest
-
-          - platform: LARCH64
-            os: ubuntu-latest
-
-          - platform: PPC64LE
-            os: ubuntu-latest
-
-          - platform: ANDROID_GLIBC
-            os: ubuntu-22.04-arm
-
-          - platform: WOW64
-            os: ubuntu-22.04-arm
 
     runs-on: ${{ matrix.os }}
     container:
@@ -421,29 +370,8 @@ jobs:
         if: steps.early-exit.outcome == 'failure'
         run: echo "BOX64_VERSION=$(cat src/box64version.h | grep BOX64_MAJOR | cut -d " " -f 3).$(cat src/box64version.h | grep BOX64_MINOR | cut -d " " -f 3).$(cat src/box64version.h | grep BOX64_REVISION | cut -d " " -f 3)" >> $GITHUB_ENV
 
-      - name: "Packaging WCP file for Winlator"
-        if: matrix.platform == 'ANDROID_GLIBC' && matrix.type != 'StaticBuild' && steps.early-exit.outcome == 'failure'
-        run: |
-          cd build
-          cat <<EOF > profile.json
-          {
-            "type": "Box64",
-            "versionName": "latest-${SHORT_COMMIT}",
-            "versionCode": 1,
-            "description": "Box64-latest-${SHORT_COMMIT}. Built from [https://github.com/ptitSeb/box64].",
-            "files": [
-              {
-                "source": "box64",
-                "target": "\${localbin}/box64"
-              }
-            ]
-          }
-          EOF
-          patchelf --set-interpreter /data/data/com.winlator/files/imagefs/usr/lib/ld-linux-aarch64.so.1 ./box64
-          tar --zstd -cf box64-latest.wcp box64 profile.json
-
-      - name: "Package Rat File for MiceWine"
-        if: matrix.platform == 'ANDROID' && matrix.type != 'StaticBuild' && steps.early-exit.outcome == 'failure'
+      - name: "Package Rat File for Windroid"
+        if: steps.early-exit.outcome == 'failure'
         run: |
           cd build
 
@@ -459,23 +387,47 @@ jobs:
 
           7z -tzip -mx=5 a box64-latest.rat files pkg-header
 
-      - name: "Upload WCP file"
-        if: matrix.platform == 'ANDROID_GLIBC' && matrix.type == 'Release' && steps.early-exit.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: box64-latest-${{ matrix.type }}-wcp
-          path: build/box64-latest.wcp
-
       - name: "Upload Rat File"
-        if: matrix.platform == 'ANDROID' && matrix.type == 'Release' && steps.early-exit.outcome == 'failure'
+        if: steps.early-exit.outcome == 'failure'
         uses: actions/upload-artifact@v4
         with:
-          name: box64-MiceWine-${{ matrix.type }}
+          name: box64-Windroid-${{ matrix.type }}
           path: build/box64-latest.rat
 
-      - name: "Upload WowBox64 file"
-        if: matrix.platform == 'WOW64' && matrix.type == 'Release' && steps.early-exit.outcome == 'failure'
-        uses: actions/upload-artifact@v4
+  release:
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: "Checkout Box64 Repository"
+        uses: actions/checkout@v4
+
+      - name: "Download all artifacts"
+        uses: actions/download-artifact@v4
         with:
-          name: wowbox64-${{ matrix.type }}
-          path: build/wowbox64-prefix/src/wowbox64-build/wowbox64.dll
+          path: artifacts
+
+      - name: "Get short Git commit"
+        id: git-info
+        run: echo "SHORT_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+
+      - name: "Get Box64 Version"
+        run: echo "BOX64_VERSION=$(cat src/box64version.h | grep BOX64_MAJOR | cut -d " " -f 3).$(cat src/box64version.h | grep BOX64_MINOR | cut -d " " -f 3).$(cat src/box64version.h | grep BOX64_REVISION | cut -d " " -f 3)" >> $GITHUB_ENV
+
+      - name: "Create Release and Upload Assets"
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.BOX64_VERSION }}
+          name: Box64 v${{ env.BOX64_VERSION }}
+          body: |
+            Box64 v${{ env.BOX64_VERSION }} - Commit ${{ env.SHORT_COMMIT }}
+            
+            Built binaries for various platforms.
+          files: |
+            artifacts/box64-Windroid-Release/*.rat
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
