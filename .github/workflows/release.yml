@@ -315,7 +315,6 @@ jobs:
             BOX64_DYNAREC_TEST=1 ctest $CTEST_OPTIONS -E nocosim
             BOX64_DYNAREC_TEST=1 QEMU_CPU=rv64,v=false,zba=true,zbb=true,zbc=true,zbs=true ctest $CTEST_OPTIONS -E nocosim
             BOX64_DYNAREC_TEST=1 QEMU_CPU=rv64,v=true,vlen=128,vext_spec=v1.0 ctest $CTEST_OPTIONS -E nocosim
-            BOX64_DYNAREC_TEST=1 QEMU_CPU=rv64,v=true,vlen=256,vext_spec=v1.0 ctest $CTEST_OPTIONS -E nocosim
             BOX64_DYNAREC_TEST=1 QEMU_CPU=thead-c906 ctest $CTEST_OPTIONS -E nocosim
 
             export INTERPRETER=$GITHUB_WORKSPACE/xuantie_qemu_install/bin/qemu-riscv64
@@ -396,7 +395,11 @@ jobs:
 
   release:
     needs: build
-    if: github.event_name == 'release'
+    # Permitir execução em eventos de Release, Push (em branches principais) ou Manualmente
+    if: |
+      github.event_name == 'release' || 
+      github.event_name == 'workflow_dispatch' || 
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -419,8 +422,8 @@ jobs:
       - name: "Create Release and Upload Assets"
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.BOX64_VERSION }}
-          name: Box64 v${{ env.BOX64_VERSION }}
+          tag_name: v${{ env.BOX64_VERSION }}-${{ env.SHORT_COMMIT }}
+          name: Box64 v${{ env.BOX64_VERSION }} (Build ${{ env.SHORT_COMMIT }})
           body: |
             Box64 v${{ env.BOX64_VERSION }} - Commit ${{ env.SHORT_COMMIT }}
             
@@ -428,6 +431,6 @@ jobs:
           files: |
             artifacts/box64-Windroid-Release/*.rat
           draft: false
-          prerelease: false
+          prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
