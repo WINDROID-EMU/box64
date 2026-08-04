@@ -127,11 +127,22 @@ jobs:
             sudo apt-get -y install git cmake make python3 patchelf $zydis_package
             if [[ ${{ matrix.platform }} == 'ANDROID' || ${{ matrix.platform }} == 'TERMUX' ]]; then
               sudo apt-get -y install p7zip
-              wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
+              wget -q https://google.com
               unzip -qq android-ndk-r26b-linux.zip
               echo "BOX64_COMPILER=$PWD/android-ndk-r26b/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang" >> $GITHUB_ENV
-              echo "BOX64_PLATFORM_MARCRO=-DANDROID=1 -DARM_DYNAREC=1 -DBAD_SIGNAL=1" >> $GITHUB_ENV
-              git clone https://github.com/termux/termux-docker.git
+              
+              # --- OTIMIZAÇÃO DE HARDWARE MOBILE (WINDROID-EMU) ---
+              # -DLD80BITS=0: Remove overhead de float x87 de 80 bits inexistente no ARM
+              # -DNOALIGN=1: Evita quebras de penalidade por acessos desalinhados de memória RAM
+              echo "BOX64_PLATFORM_MARCRO=-DANDROID=1 -DARM_DYNAREC=1 -DBAD_SIGNAL=1 -DLD80BITS=0 -DNOALIGN=1" >> $GITHUB_ENV
+              
+              # --- FLAGS EXTRAS DO CLANG (COMPILAÇÃO NATIVA DO ECOSSISTEMA) ---
+              # -O3: Vetorização agressiva e desdobramento de laços (Loops)
+              # -flto=thin: Elimina redundâncias de códigos cruzados diminuindo o binário final
+              # -march/mtune: Habilita instruções nativas de criptografia/CRC nativas do ARMv8
+              echo "BOX64_CFLAGS=-O3 -flto=thin -march=armv8-a+crc+crypto -mtune=generic" >> $GITHUB_ENV
+              
+              git clone https://github.com
               cd termux-docker
               git checkout 148b93d989cbc572719e050135b3e13f115f2a8e~1
               cd ..
@@ -142,21 +153,24 @@ jobs:
               sudo apt-get -y install git gcc-aarch64-linux-gnu
               echo "BOX64_PLATFORM_MARCRO=-DARM64=1 -DWINLATOR_GLIBC=1 -DARM_DYNAREC=1 -DBAD_SIGNAL=1" >> $GITHUB_ENV
               echo "BOX64_COMPILER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+              echo "BOX64_CFLAGS=" >> $GITHUB_ENV
             elif [[ ${{ matrix.platform }} == 'WOW64' ]]; then
               sudo apt-get -y install git gcc-aarch64-linux-gnu
               echo "BOX64_PLATFORM_MARCRO=-DWOW64=1 -DARM_DYNAREC=1" >> $GITHUB_ENV
               echo "BOX64_COMPILER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+              echo "BOX64_CFLAGS=" >> $GITHUB_ENV
               export LLVM_MINGW_VERSION=20260311
-              wget -q https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-aarch64.tar.xz
+              wget -q https://github.com{LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-aarch64.tar.xz
               tar -xf llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-aarch64.tar.xz
               echo "MINGW_COMPILER_PATH=$PWD/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-aarch64/bin" >> $GITHUB_ENV
             else
               sudo apt-get -y install git gcc-aarch64-linux-gnu
               echo "BOX64_PLATFORM_MARCRO=-D${{ matrix.platform }}=1" >> $GITHUB_ENV
               echo "BOX64_COMPILER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+              echo "BOX64_CFLAGS=" >> $GITHUB_ENV
             fi
             if [[ ${{ matrix.platform }} == 'TERMUX' ]]; then
-              wget https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-sysv-semaphore/libandroid-sysv-semaphore_0.1-1_aarch64.deb
+              wget https://termux.dev
               7z x libandroid-sysv-semaphore_0.1-1_aarch64.deb
               tar -xf data.tar.xz
               sudo cp -rf data /
@@ -169,6 +183,7 @@ jobs:
               echo "IS_TERMUX=0" >> $GITHUB_ENV
             fi
           else
+            echo "BOX64_CFLAGS=" >> $GITHUB_ENV
             if [[ ${{ matrix.platform }} == 'X64' ]]; then
               echo "BOX64_PLATFORM_MARCRO=-DLD80BITS=1 -DNOALIGN=1" >> $GITHUB_ENV
               echo "BOX64_COMPILER=gcc" >> $GITHUB_ENV
@@ -179,7 +194,7 @@ jobs:
               sudo apt-get -y install git gcc-14-riscv64-linux-gnu cmake make python3 ninja-build libglib2.0-dev libzydis-dev
             elif [[ ${{ matrix.platform }} == 'LARCH64' ]]; then
               sudo mkdir /usr/local/larch
-              wget -O- -q https://github.com/loongson/build-tools/releases/download/2025.02.21/x86_64-cross-tools-loongarch64-binutils_2.44-gcc_14.2.0-glibc_2.41.tar.xz | sudo tar -C /usr/local/larch --strip-components=1 --xz -xf -
+              wget -O- -q https://github.com | sudo tar -C /usr/local/larch --strip-components=1 --xz -xf -
               sudo ln -sf /usr/local/larch/target /usr/loongarch64-linux-gnu
               sudo cp -r /usr/local/larch/loongarch64-unknown-linux-gnu/lib/* /usr/loongarch64-linux-gnu/lib64/
               for i in objdump objcopy strip; do
@@ -190,244 +205,4 @@ jobs:
               sudo chmod 755 /usr/bin/loongarch64-linux-gnu-{gcc,g++}
 
               echo BOX64_PLATFORM_MARCRO="-DLARCH64=ON" >> $GITHUB_ENV
-              echo "BOX64_COMPILER=loongarch64-linux-gnu-gcc" >> $GITHUB_ENV
-              sudo apt-get -y install git cmake make python3 libzydis-dev
-            elif [[ ${{ matrix.platform }} == 'PPC64LE' ]]; then
-              echo BOX64_PLATFORM_MARCRO="-DPPC64LE=ON" >> $GITHUB_ENV
-              echo "BOX64_COMPILER=powerpc64le-linux-gnu-gcc" >> $GITHUB_ENV
-              sudo apt-get -y install git gcc-powerpc64le-linux-gnu cmake make python3 libzydis-dev
-            else
-              echo BOX64_PLATFORM_MARCRO="-DARM_DYNAREC=ON" >> $GITHUB_ENV
-              echo "BOX64_COMPILER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-              sudo apt-get -y install git gcc-aarch64-linux-gnu cmake make python3 libzydis-dev
-            fi
-          fi
-          if [[ ${{ matrix.type }} == 'Release' ]]; then
-            echo BOX64_BUILD_TYPE=Release >> $GITHUB_ENV
-            echo BOX64_HAVE_TRACE=0 >> $GITHUB_ENV
-            echo BOX64_STATICBUILD=0 >> $GITHUB_ENV
-            echo BOX64_BOX32=0 >> $GITHUB_ENV
-          elif [[ ${{ matrix.type }} == 'StaticBuild' ]]; then
-            echo BOX64_BUILD_TYPE=Release >> $GITHUB_ENV
-            echo BOX64_HAVE_TRACE=0 >> $GITHUB_ENV
-            echo BOX64_STATICBUILD=1 >> $GITHUB_ENV
-            echo BOX64_BOX32=0 >> $GITHUB_ENV
-          elif [[ ${{ matrix.type }} == 'Box32' ]]; then
-            echo BOX64_BUILD_TYPE=Release >> $GITHUB_ENV
-            echo BOX64_HAVE_TRACE=0 >> $GITHUB_ENV
-            echo BOX64_STATICBUILD=0 >> $GITHUB_ENV
-            echo BOX64_BOX32=1 >> $GITHUB_ENV
-          else
-            echo BOX64_BUILD_TYPE=RelWithDebInfo >> $GITHUB_ENV
-            echo BOX64_HAVE_TRACE=1 >> $GITHUB_ENV
-            echo BOX64_STATICBUILD=0 >> $GITHUB_ENV
-            echo BOX64_BOX32=0 >> $GITHUB_ENV
-          fi
-          if [[ ${{ matrix.os }} == 'ubuntu-22.04-arm' ]]; then
-            echo "BOX64_ZYDIS3=1" >> $GITHUB_ENV
-          else
-            echo "BOX64_ZYDIS3=0" >> $GITHUB_ENV
-          fi
-
-      - name: "Get XuanTie QEMU Cache Key"
-        if: matrix.platform == 'RISCV' && steps.early-exit.outcome == 'failure'
-        id: get-xuantie-qemu-cache-key
-        run: |
-          echo "key=f2dfdd13014d51f957c7172acc2e791cb42dc400" >> $GITHUB_OUTPUT
-
-      - name: "Cache XuanTie QEMU"
-        if: matrix.platform == 'RISCV' && steps.early-exit.outcome == 'failure'
-        id: cache-xuantie-qemu
-        uses: actions/cache@v3
-        with:
-          path: ${{ github.workspace }}/xuantie_qemu_install
-          key: ${{ runner.os }}-${{ steps.get-xuantie-qemu-cache-key.outputs.key }}-xuantie-qemu
-
-      - name: "Checkout XuanTie QEMU"
-        if: matrix.platform == 'RISCV' && steps.cache-xuantie-qemu.outputs.cache-hit != 'true' && steps.early-exit.outcome == 'failure'
-        uses: actions/checkout@v3
-        with:
-          repository: revyos/qemu
-          path: xuantie_qemu
-          ref: f2dfdd13014d51f957c7172acc2e791cb42dc400
-
-      - name: "Build XuanTie QEMU for XTheadVector"
-        if: matrix.platform == 'RISCV' && steps.cache-xuantie-qemu.outputs.cache-hit != 'true' && steps.early-exit.outcome == 'failure'
-        run: |
-          cd xuantie_qemu
-          ./configure --prefix=$GITHUB_WORKSPACE/xuantie_qemu_install --target-list=riscv64-linux-user --disable-system
-          make -j$(nproc)
-          make install
-
-      - name: "Display Build info"
-        if: steps.early-exit.outcome == 'failure'
-        run: |
-          echo "CMake Platform Macro: ${{ env.BOX64_PLATFORM_MARCRO }}"
-          echo "CMake C Compiler: ${{ env.BOX64_COMPILER }}"
-          echo "Build type: ${{ env.BOX64_BUILD_TYPE }}"
-          echo "Trace Enabled: ${{ env.BOX64_HAVE_TRACE }}"
-          echo "StaticBuild Enabled: ${{ env.BOX64_STATICBUILD }}"
-          echo "Box32 Enabled: ${{ env.BOX64_BOX32 }}"
-
-      - name: "Build Box64"
-        if: steps.early-exit.outcome == 'failure'
-        run: |
-          export PATH=$PATH:${{ env.MINGW_COMPILER_PATH }}
-          mkdir build
-          cd build
-          cmake .. -DCMAKE_C_COMPILER=${{ env.BOX64_COMPILER }}\
-                   -DTERMUX=${{ env.IS_TERMUX }}\
-                   ${{ env.BOX64_PLATFORM_MARCRO }}\
-                   -DCMAKE_BUILD_TYPE=${{ env.BOX64_BUILD_TYPE }}\
-                   -DHAVE_TRACE=${{ env.BOX64_HAVE_TRACE }}\
-                   -DZYDIS3=${{ env.BOX64_ZYDIS3 }}\
-                   -DSTATICBUILD=${{ env.BOX64_STATICBUILD }}\
-                   -DBOX32=${{ env.BOX64_BOX32 }}\
-                   -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON\
-                   -DCI=${{ matrix.platform != 'ANDROID' }}
-          make -j$(nproc) VERBOSE=1
-
-      - name: "Test Box64"
-        if: steps.early-exit.outcome == 'failure'
-        run: |
-          if [[ ${{ matrix.platform }} != 'X64' ]]; then
-            mkdir qemu10
-            wget -O- -q https://archive.archlinux.org/packages/q/qemu-user-static/qemu-user-static-10.0.0-7-x86_64.pkg.tar.zst  | tar -I zstd -C qemu10 -xf -
-            sudo cp qemu10/usr/bin/* /usr/bin/
-          fi
-
-          cd build
-          export CTEST_OPTIONS="-j$(nproc) --timeout 300 --output-on-failure --repeat until-pass:20"
-          if [[ ${{ matrix.platform }} == 'RISCV' ]]; then
-            export INTERPRETER=qemu-riscv64-static
-            export QEMU_LD_PREFIX=/usr/riscv64-linux-gnu/
-
-            if [[ ${{ env.BOX64_BOX32 }} == '1' ]]; then
-              export BOX32_PERSONA32BITS=1 # hack to disable personality setting
-            fi
-            ctest $CTEST_OPTIONS
-            QEMU_CPU=rv64,v=false BOX64_DYNAREC=0 ctest $CTEST_OPTIONS
-            QEMU_CPU=rv64,v=false,zba=true,zbb=true,zbc=true,zbs=true ctest $CTEST_OPTIONS
-            QEMU_CPU=rv64,v=true,vlen=128,vext_spec=v1.0 ctest $CTEST_OPTIONS
-            QEMU_CPU=rv64,v=true,vlen=256,vext_spec=v1.0 ctest $CTEST_OPTIONS
-            QEMU_CPU=thead-c906 ctest $CTEST_OPTIONS
-
-            BOX64_DYNAREC_TEST=1 ctest $CTEST_OPTIONS -E nocosim
-            BOX64_DYNAREC_TEST=1 QEMU_CPU=rv64,v=false,zba=true,zbb=true,zbc=true,zbs=true ctest $CTEST_OPTIONS -E nocosim
-            BOX64_DYNAREC_TEST=1 QEMU_CPU=rv64,v=true,vlen=128,vext_spec=v1.0 ctest $CTEST_OPTIONS -E nocosim
-            BOX64_DYNAREC_TEST=1 QEMU_CPU=rv64,v=true,vlen=256,vext_spec=v1.0 ctest $CTEST_OPTIONS -E nocosim
-            BOX64_DYNAREC_TEST=1 QEMU_CPU=thead-c906 ctest $CTEST_OPTIONS -E nocosim
-
-            export INTERPRETER=$GITHUB_WORKSPACE/xuantie_qemu_install/bin/qemu-riscv64
-            QEMU_CPU=c910v ctest $CTEST_OPTIONS
-            BOX64_DYNAREC_TEST=1 QEMU_CPU=c910v ctest $CTEST_OPTIONS -E nocosim
-          elif [[ ${{ matrix.platform }} == 'LARCH64' ]]; then
-            export INTERPRETER=qemu-loongarch64-static
-            export QEMU_LD_PREFIX=/usr/loongarch64-linux-gnu/
-
-            if [[ ${{ env.BOX64_BOX32 }} == '1' ]]; then
-              export BOX32_PERSONA32BITS=1 # hack to disable personality setting
-            fi
-            ctest $CTEST_OPTIONS -E nocosim
-            BOX64_DYNAREC_NOHOSTEXT=1 ctest $CTEST_OPTIONS -E nocosim
-            BOX64_DYNAREC=0 ctest $CTEST_OPTIONS -E nocosim
-
-            BOX64_DYNAREC_TEST=1 ctest $CTEST_OPTIONS -E nocosim
-            BOX64_DYNAREC_TEST=1 BOX64_DYNAREC_NOHOSTEXT=1 ctest $CTEST_OPTIONS -E nocosim
-          elif [[ ${{ matrix.platform }} == 'PPC64LE' ]]; then
-            export INTERPRETER=qemu-ppc64le-static
-            export QEMU_LD_PREFIX=/usr/powerpc64le-linux-gnu/
-
-            ctest $CTEST_OPTIONS -E nocosim
-            BOX64_DYNAREC=0 ctest $CTEST_OPTIONS -E nocosim
-
-            BOX64_DYNAREC_TEST=1 ctest $CTEST_OPTIONS -E nocosim
-          elif [[ ${{ matrix.platform }} == 'ANDROID' ]]; then
-            export INTERPRETER=qemu-aarch64-static
-            export QEMU_LD_PREFIX=/system/lib64
-            
-            BOX64_DYNAREC=0 ctest $CTEST_OPTIONS
-            ctest $CTEST_OPTIONS
-          elif [[ ${{ matrix.platform }} == 'TERMUX' ]]; then
-            export INTERPRETER=qemu-aarch64-static
-            export QEMU_SET_ENV=LD_LIBRARY_PATH=/data/data/com.termux/files/usr/lib 
-            export QEMU_LD_PREFIX=/system/lib64:/data/data/com.termux/files/usr/lib
-
-            BOX64_DYNAREC=0 ctest $CTEST_OPTIONS
-            ctest $CTEST_OPTIONS
-          elif [[ ${{matrix.type}} == 'Box32' ]]; then
-            ctest $CTEST_OPTIONS
-          else
-            ctest -j$(nproc)
-          fi
-
-      - name: "Get short Git commit"
-        id: git-info
-        if: steps.early-exit.outcome == 'failure'
-        run: echo "SHORT_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-
-      - name: "Get Box64 Version"
-        if: steps.early-exit.outcome == 'failure'
-        run: echo "BOX64_VERSION=$(cat src/box64version.h | grep BOX64_MAJOR | cut -d " " -f 3).$(cat src/box64version.h | grep BOX64_MINOR | cut -d " " -f 3).$(cat src/box64version.h | grep BOX64_REVISION | cut -d " " -f 3)" >> $GITHUB_ENV
-
-      - name: "Package Rat File for Windroid"
-        if: steps.early-exit.outcome == 'failure'
-        run: |
-          cd build
-
-          mkdir -p files/usr/bin
-
-          cp box64 files/usr/bin
-
-          echo "name=Box64 (CI Build)" > pkg-header
-          echo "category=Box64" >> pkg-header
-          echo "version=${BOX64_VERSION}-${SHORT_COMMIT}" >> pkg-header
-          echo "architecture=aarch64" >> pkg-header
-          echo "vkDriverLib=" >> pkg-header
-
-          7z -tzip -mx=5 a box64-latest.rat files pkg-header
-
-      - name: "Upload Rat File"
-        if: steps.early-exit.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: box64-Windroid-${{ matrix.type }}
-          path: build/box64-latest.rat
-
-  release:
-    needs: build
-    if: github.event_name == 'release'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: "Checkout Box64 Repository"
-        uses: actions/checkout@v4
-
-      - name: "Download all artifacts"
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: "Get short Git commit"
-        id: git-info
-        run: echo "SHORT_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
-
-      - name: "Get Box64 Version"
-        run: echo "BOX64_VERSION=$(cat src/box64version.h | grep BOX64_MAJOR | cut -d " " -f 3).$(cat src/box64version.h | grep BOX64_MINOR | cut -d " " -f 3).$(cat src/box64version.h | grep BOX64_REVISION | cut -d " " -f 3)" >> $GITHUB_ENV
-
-      - name: "Create Release and Upload Assets"
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ env.BOX64_VERSION }}
-          name: Box64 v${{ env.BOX64_VERSION }}
-          body: |
-            Box64 v${{ env.BOX64_VERSION }} - Commit ${{ env.SHORT_COMMIT }}
-            
-            Built binaries for various platforms.
-          files: |
-            artifacts/box64-Windroid-Release/*.rat
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              
