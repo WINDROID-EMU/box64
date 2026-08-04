@@ -109,6 +109,28 @@ void rv64Detect(void)
         cpuext.zbs = Check(my_block);
     }
 
+    // Test Zicbom with CBO.FLUSH
+    block = (uint32_t*)my_block;
+    // a2 is the pointer of buf in Check.
+    CBO_FLUSH(A2);
+    ADDI(A0, xZR, 42);
+    BR(xRA);
+    cpuext.zicbom = Check(my_block);
+
+    // Test Zicbop with PREFETCH.R
+    block = (uint32_t*)my_block;
+    CBO_PREFETCH_R(A2, 0);
+    ADDI(A0, xZR, 42);
+    BR(xRA);
+    cpuext.zicbop = Check(my_block);
+
+    // Test Zicond with CZERO.EQZ
+    block = (uint32_t*)my_block;
+    CZERO_EQZ(A0, A0, A1);
+    ADDI(A0, xZR, 42);
+    BR(xRA);
+    cpuext.zicond = Check(my_block);
+
     block = (uint32_t*)my_block;
     CSRRS(xZR, xZR, 0xc22 /* vlenb */);
     ADDI(A0, xZR, 42);
@@ -256,6 +278,9 @@ int DetectHostCpuFeatures(void)
                 if (!strcasecmp(p, "xtheadmemidx")) cpuext.xtheadmemidx = 0;
                 if (!strcasecmp(p, "xtheadmempair")) cpuext.xtheadmempair = 0;
                 if (!strcasecmp(p, "xtheadcondmov")) cpuext.xtheadcondmov = 0;
+                if (!strcasecmp(p, "zicbom")) cpuext.zicbom = 0;
+                if (!strcasecmp(p, "zicbop")) cpuext.zicbop = 0;
+                if (!strcasecmp(p, "zicond")) cpuext.zicond = 0;
                 p = strtok(NULL, ",");
             }
         }

@@ -445,7 +445,7 @@ uintptr_t dynarec64_660F_vector(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t i
                 case 0x17:
                     INST_NAME("PTEST Gx, Ex");
                     nextop = F8;
-                    SETFLAGS(X_ALL, SF_SET, NAT_FLAGS_NOFUSION);
+                    SETFLAGS(X_ALL, SF_SET_NODF, NAT_FLAGS_NOFUSION);
                     SET_ELEMENT_WIDTH(x1, VECTOR_SEW64, 1);
                     GETGX_vector(q0, 0, VECTOR_SEW64);
                     GETEX_vector(q1, 0, 0, VECTOR_SEW64);
@@ -464,8 +464,7 @@ uintptr_t dynarec64_660F_vector(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t i
                         }
                         VMV_X_S(x4, VMASK);
                         if (!cpuext.xtheadvector) ANDI(x4, x4, 0b11);
-                        BNEZ(x4, 8);
-                        ORI(xFlags, xFlags, 1 << F_ZF);
+                        SET_FLAGS_EQZ(x4, F_ZF, x3);
                     }
                     IFX (X_CF) {
                         VXOR_VI(v0, q0, 0x1F, VECTOR_UNMASKED);
@@ -480,8 +479,7 @@ uintptr_t dynarec64_660F_vector(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t i
                         }
                         VMV_X_S(x4, VMASK);
                         if (!cpuext.xtheadvector) ANDI(x4, x4, 0b11);
-                        BNEZ(x4, 8);
-                        ORI(xFlags, xFlags, 1 << F_CF);
+                        SET_FLAGS_EQZ(x4, F_CF, x3);
                     }
                     break;
                 case 0x1C ... 0x1E:
@@ -1090,6 +1088,7 @@ uintptr_t dynarec64_660F_vector(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t i
             }
             break;
         case 0x51:
+            if (!BOX64ENV(dynarec_fastnan)) return 0;
             INST_NAME("SQRTPD Gx, Ex");
             nextop = F8;
             SET_ELEMENT_WIDTH(x1, VECTOR_SEW64, 1);
@@ -1168,6 +1167,7 @@ uintptr_t dynarec64_660F_vector(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t i
             VFMUL_VV(q0, q0, q1, VECTOR_UNMASKED);
             break;
         case 0x5A:
+            if (!BOX64ENV(dynarec_fastnan)) return 0;
             INST_NAME("CVTPD2PS Gx, Ex");
             nextop = F8;
             SET_ELEMENT_WIDTH(x1, VECTOR_SEW64, 1);
@@ -1213,11 +1213,7 @@ uintptr_t dynarec64_660F_vector(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t i
             SET_ELEMENT_WIDTH(x1, VECTOR_SEW64, 1);
             GETGX_vector(q0, 1, VECTOR_SEW64);
             GETEX_vector(q1, 0, 0, VECTOR_SEW64);
-            v0 = fpu_get_scratch(dyn);
-            VMFEQ_VV(VMASK, q0, q0, VECTOR_UNMASKED);
-            VMFEQ_VV(v0, q1, q1, VECTOR_UNMASKED);
-            VFMIN_VV(q0, q0, q1, VECTOR_UNMASKED);
-            VMAND_MM(VMASK, v0, VMASK);
+            VMFLT_VV(VMASK, q0, q1, VECTOR_UNMASKED);
             VXOR_VI(VMASK, VMASK, 0x1F, VECTOR_UNMASKED);
             VADD_VX(q0, q1, xZR, VECTOR_MASKED);
             break;
@@ -1236,11 +1232,7 @@ uintptr_t dynarec64_660F_vector(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t i
             SET_ELEMENT_WIDTH(x1, VECTOR_SEW64, 1);
             GETGX_vector(q0, 1, VECTOR_SEW64);
             GETEX_vector(q1, 0, 0, VECTOR_SEW64);
-            v0 = fpu_get_scratch(dyn);
-            VMFEQ_VV(VMASK, q0, q0, VECTOR_UNMASKED);
-            VMFEQ_VV(v0, q1, q1, VECTOR_UNMASKED);
-            VFMAX_VV(q0, q0, q1, VECTOR_UNMASKED);
-            VMAND_MM(VMASK, v0, VMASK);
+            VMFLT_VV(VMASK, q1, q0, VECTOR_UNMASKED);
             VXOR_VI(VMASK, VMASK, 0x1F, VECTOR_UNMASKED);
             VADD_VX(q0, q1, xZR, VECTOR_MASKED);
             break;
@@ -1743,18 +1735,27 @@ uintptr_t dynarec64_660F_vector(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t i
             vector_vsetvli(dyn, ninst, x1, VECTOR_SEW64, VECTOR_LMUL2, 2);
             VSLIDEUP_VI(v0, (q1 & 1) ? d1 : q1, 2, VECTOR_UNMASKED);
             VCOMPRESS_VM(d0, v0, VMASK);
-            VXOR_VI(VMASK, VMASK, 0x1F, VECTOR_UNMASKED);
+            VMNAND_MM(VMASK, VMASK, VMASK);
             VCOMPRESS_VM(d1, v0, VMASK);
             vector_vsetvli(dyn, ninst, x1, VECTOR_SEW64, VECTOR_LMUL1, 1);
             if (!BOX64ENV(dynarec_fastnan)) {
                 VMFEQ_VV(v0, d0, d0, VECTOR_UNMASKED);
                 VMFEQ_VV(v1, d1, d1, VECTOR_UNMASKED);
-                VMAND_MM(v0, v0, v1);
             }
             VFADD_VV(q0, d0, d1, VECTOR_UNMASKED);
             if (!BOX64ENV(dynarec_fastnan)) {
-                VMFEQ_VV(v1, q0, q0, VECTOR_UNMASKED);
+                MOV64x(x3, 0x0008000000000000ULL);
+                VMNAND_MM(VMASK, v0, v0);
+                VOR_VX(d0, d0, x3, VECTOR_MASKED);
+                VMNAND_MM(VMASK, v1, v1);
+                VOR_VX(d1, d1, x3, VECTOR_MASKED);
                 VMANDN_MM(VMASK, v0, v1);
+                VMERGE_VVM(q0, q0, d1);
+                VMNAND_MM(VMASK, v0, v0);
+                VMERGE_VVM(q0, q0, d0);
+                VMAND_MM(VMASK, v0, v1);
+                VMFEQ_VV(d0, q0, q0, VECTOR_UNMASKED);
+                VMANDN_MM(VMASK, VMASK, d0);
                 VFSGNJN_VV(q0, q0, q0, VECTOR_MASKED);
             }
             break;

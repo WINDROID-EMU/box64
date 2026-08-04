@@ -11,12 +11,15 @@ typedef struct box64context_s box64context_t;
 extern box64env_t box64env;
 extern box64env_t* cur_box64env;
 
+#define X86_PAGE_SIZE 4096UL
+
 extern uintptr_t box64_pagesize;
 extern int box64_rdtsc;
 extern uint8_t box64_rdtsc_shift;
 extern int box64_is32bits;
 extern int box64_isAddressSpace32;
 extern int box64_nolibs;
+extern int box64_hasinterp;
 #ifdef DYNAREC
 extern cpu_ext_t cpuext;
 #endif

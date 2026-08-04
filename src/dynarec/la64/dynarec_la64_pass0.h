@@ -18,7 +18,7 @@
 #define READFLAGS_FUSION(A, s1, s2, s3, s4, s5)                                                                \
     if (BOX64ENV(dynarec_nativeflags) && ninst > 0) {                                                          \
         int prev = ninst - 1;                                                                                  \
-        while (prev && dyn->insts[prev].no_scratch_usage)                                                      \
+        while (prev && (dyn->insts[prev].no_scratch_usage || dyn->insts[prev].nat_flags_fusion))               \
             prev -= 1;                                                                                         \
         if (!dyn->insts[prev].nat_flags_nofusion) {                                                            \
             if ((A) == (X_ZF))                                                                                 \
@@ -81,6 +81,9 @@
     dyn->insts[ninst].up32_write32 = 0;                                                                          \
     dyn->insts[ninst].up32_skip = 0;                                                                             \
     dyn->insts[ninst].up32_pending = 0;                                                                          \
+    dyn->insts[ninst].comis_fusion = -1;                                                                         \
+    dyn->insts[ninst].comis_mark = 0;                                                                            \
+    dyn->insts[ninst].host_call = 0;                                                                             \
     dyn->insts[ninst].f_entry = dyn->f;                                                                          \
     if (ninst) { dyn->insts[ninst - 1].x64.size = dyn->insts[ninst].x64.addr - dyn->insts[ninst - 1].x64.addr; } \
     AREFLAGSNEEDED()

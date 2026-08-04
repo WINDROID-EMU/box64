@@ -26,6 +26,8 @@
 #include "../dynarec_helper.h"
 #include "dynarec_la64_helper.h"
 
+static_assert(offsetof(x64emu_t, mxcsr) == EMU_MXCSR, "EMU_MXCSR out of sync with x64emu_t");
+
 /* setup r2 to address pointed by ED, also fixaddress is an optionnal delta in the range [-absmax, +absmax], with delta&mask==0 to be added to ed for LDR/STR */
 uintptr_t geted(dynarec_la64_t* dyn, uintptr_t addr, int ninst, uint8_t nextop, uint8_t* ed, uint8_t hint, uint8_t scratch, int64_t* fixaddress, rex_t rex, int* l, int i12, int delta)
 {
@@ -389,7 +391,7 @@ static int indirect_lookup(dynarec_la64_t* dyn, int ninst, int is32bits, int s1,
     MAYUSE(dyn);
     if (!is32bits) {
         SRLI_D(s1, xRIP, 48);
-        BNEZ_safe(s1, (intptr_t)dyn->jmp_next - (intptr_t)dyn->block);
+        BNEZ_safe_(s1, (intptr_t)dyn->jmp_next - (intptr_t)dyn->block);
         if (dyn->need_reloc) {
             TABLE64C(s2, const_jmptbl48);
         } else {
@@ -554,6 +556,7 @@ void iret_to_next(dynarec_la64_t* dyn, uintptr_t ip, int ninst, int is32bits, in
 void call_c(dynarec_la64_t* dyn, int ninst, la64_consts_t fnc, int reg, int ret, int saveflags, int savereg, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6)
 {
     MAYUSE(fnc);
+    dyn->insts[ninst].host_call = 1;
     UP32_READALL();
     CHECK_DFNONE(1);
     if (savereg == 0)
@@ -586,8 +589,10 @@ void call_c(dynarec_la64_t* dyn, int ninst, la64_consts_t fnc, int reg, int ret,
     if (arg5) MV(A5, arg5);
     if (arg6) MV(A6, arg6);
     MV(A0, xEmu);
+    if (!dyn->x87round_active) MOVGR2FCSR(FCSR3, xZR);
     JIRL(xRA, reg, 0);
     LA64_RESTORE_VZERO();
+    if (!dyn->x87round_active) sse_fcsr3_from_mxcsr(dyn, ninst, x2);
     if (ret >= 0) {
         MV(ret, A0);
     }
@@ -625,12 +630,18 @@ void call_c(dynarec_la64_t* dyn, int ninst, la64_consts_t fnc, int reg, int ret,
 void call_n(dynarec_la64_t* dyn, int ninst, void* fnc, int w)
 {
     MAYUSE(fnc);
+    dyn->insts[ninst].host_call = 1;
     UP32_READALL();
     CHECK_DFNONE(1);
     fpu_pushcache(dyn, ninst, x3, 1);
     ST_D(xRSP, xEmu, offsetof(x64emu_t, regs[_SP]));
     ST_D(xRBP, xEmu, offsetof(x64emu_t, regs[_BP]));
     ST_D(xRBX, xEmu, offsetof(x64emu_t, regs[_BX]));
+    int nfp = (abs(w) & 15) - 1;
+    if (nfp > 0)
+        for (int i = 0; i < nfp; ++i)
+            sse_get_reg(dyn, ninst, x3, i, w);
+    if (w < 0) sse_get_reg_empty(dyn, ninst, x3, 0);
     // check if additional sextw needed
     int sextw_mask = ((w > 0 ? w : -w) >> 4) & 0b111111;
     for (int i = 0; i < 6; i++) {
@@ -643,8 +654,10 @@ void call_n(dynarec_la64_t* dyn, int ninst, void* fnc, int w)
     // Note that if need_reloc is active, the TABLE64 will trigger cancel block,
     // because native function might be very different on a next run: different function address, different brick, different everything basicaly
     // and we don't have a relocation mecanism here, it's too complex
+    MOVGR2FCSR(FCSR3, xZR);
     JIRL(xRA, x3, 0x0);
     LA64_RESTORE_VZERO();
+    sse_fcsr3_from_mxcsr(dyn, ninst, x2);
     // put return value in x64 regs
     if (w > 0) {
         MV(xRAX, A0);
@@ -893,6 +906,7 @@ int x87_setround(dynarec_la64_t* dyn, int ninst, int s1, int s2)
     MAYUSE(ninst);
     MAYUSE(s1);
     MAYUSE(s2);
+    dyn->x87round_active = 1;
     LD_W(s1, xEmu, offsetof(x64emu_t, cw));
     BSTRPICK_W(s1, s1, 11, 10);
     // MMX/x87 Round mode: 0..3: Nearest, Down, Up, Chop
@@ -907,25 +921,20 @@ int x87_setround(dynarec_la64_t* dyn, int ninst, int s1, int s2)
     return s2;
 }
 
-// Set rounding according to mxcsr flags, return reg to restore flags
-int sse_setround(dynarec_la64_t* dyn, int ninst, int s1, int s2)
+// Sync FCSR3 round mode from emu->mxcsr, destroying s1
+// MMX/x87 Round mode: 0..3: Nearest, Down, Up, Chop
+// LA64: 0..3: Nearest, TowardZero, TowardsPositive, TowardsNegative
+// 0->0, 1->3, 2->2, 3->1
+void sse_fcsr3_from_mxcsr(dynarec_la64_t* dyn, int ninst, int s1)
 {
     MAYUSE(dyn);
     MAYUSE(ninst);
-    MAYUSE(s1);
-    MAYUSE(s2);
     LD_W(s1, xEmu, offsetof(x64emu_t, mxcsr));
     BSTRPICK_W(s1, s1, 14, 13);
-    // MMX/x87 Round mode: 0..3: Nearest, Down, Up, Chop
-    // LA64: 0..3: Nearest, TowardZero, TowardsPositive, TowardsNegative
-    // 0->0, 1->3, 2->2, 3->1
     SUB_W(s1, xZR, s1);
     ANDI(s1, s1, 3);
-    // done
     SLLI_D(s1, s1, 8);
-    MOVFCSR2GR(s2, FCSR3);
-    MOVGR2FCSR(FCSR3, s1); // exchange RM with current
-    return s2;
+    MOVGR2FCSR(FCSR3, s1);
 }
 
 int lsxcache_st_coherency(dynarec_la64_t* dyn, int ninst, int a, int b)
@@ -1322,6 +1331,7 @@ void x87_restoreround(dynarec_la64_t* dyn, int ninst, int s1)
     MAYUSE(dyn);
     MAYUSE(ninst);
     MAYUSE(s1);
+    dyn->x87round_active = 0;
     MOVGR2FCSR(FCSR3, s1);
 }
 
@@ -2340,21 +2350,15 @@ void la64_move64(dynarec_la64_t* dyn, int ninst, int reg, int64_t val)
 
 void checkCRC(dynarec_la64_t* dyn, int ninst)
 {
-    // la64_crc_autocrc will use x1-x5 instead of A0-A4 to avoind having to move around the regs
-    // grab the dynablock address in x6, as this on will not be erased by crc functions
     int delta = -(dyn->native_size + sizeof(void*));
     PCADDU12I(x6, SPLIT20(delta));
     LD_D(x6, x6, SPLIT12(delta));
-    // prepare and call the crc function
-    TABLE64C(x3, const_la64_crc_autocrc);
-    LD_D(x1, x6, offsetof(dynablock_t, x64_addr));
-    LD_WU(x2, x6, offsetof(dynablock_t, x64_size));
-    JIRL(xRA, x3, 0x0);
-    LA64_RESTORE_VZERO();
-    // done, result in x1, load the stored hash (sign extended, as the crc will also be sign extended)
-    LD_W(x2, x6, offsetof(dynablock_t, hash));
-    // compare computed crc with stored one, jump to continue is equal
-    BEQ(x1, x2, 4+3*4); // TABLE64C generates 2 opcodes...
-    TABLE64C(x3, const_native_next_invalid);
+    TABLE64C(x4, const_la64_crc_autocrc);
+    LD_D(x1, x6, offsetof(dynablock_t, x64_readaddr));
+    LD_WU(x2, x6, offsetof(dynablock_t, hash));
+    LD_WU(x3, x6, offsetof(dynablock_t, x64_size));
+    JIRL(xRA, x4, 0x0); // returns zero when the current source has the stored crc.
+    BEQZ(x1, 4+3*4);
+    TABLE64C(x3, const_native_next_invalid); // 2 opcodes
     JIRL(xRA, x3, 0x0);
 }

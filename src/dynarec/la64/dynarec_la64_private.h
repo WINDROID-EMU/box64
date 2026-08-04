@@ -123,6 +123,7 @@ typedef struct instruction_la64_s {
     uint8_t             nat_flags_sign:1;
     uint8_t             nat_flags_sf:1;
     uint8_t             nat_flags_needsign:1;
+    uint8_t             nat_flags_needunsigned:1;
     uint8_t             no_scratch_usage : 1; // this opcode does not use scratch register
     uint8_t             nat_flags_op1;
     uint8_t             nat_flags_op2;
@@ -132,12 +133,15 @@ typedef struct instruction_la64_s {
     unsigned            x87_used:1; // no fine tracking, just a global "any reg used"
     unsigned            fpu_used:1; // any xmm/ymm/x87/mmx reg used
     unsigned            fpupurge:1;   // this opcode will purge all fpu regs
-    uint16_t            nat_next_inst;
+    uint16_t            nat_next_inst;  // for producer: first consumer; for consumer: next consumer
     uint16_t            up32_read;       // bitmask of GPRs whose upper 32 bits are read by this instruction
     uint16_t            up32_write64;    // bitmask of GPRs written as 64-bit by this instruction (upper 32 become defined)
     uint16_t            up32_write32;    // bitmask of GPRs written as 32-bit by this instruction
     uint16_t            up32_skip;       // bitmask of GPRs where the implicit zero-up after a 32-bit write can be skipped
     uint16_t            up32_pending;    // bitmask of GPRs whose upper 32 bits are stale at entry to this instruction
+    int8_t              comis_fusion;
+    uint8_t             comis_mark:1;
+    uint8_t             host_call:1;
     int16_t             rsp_entry;       // pending rsp offset at entry
     int16_t             rsp_flush;       // rsp offset to emit right after this push/pop
     uint8_t             rsp_merge : 1;   // this push/pop is emitted with merged rsp offset
@@ -195,6 +199,7 @@ typedef struct dynarec_la64_s {
     uint8_t              is_file_mapped:1;
     void*                gdbjit_block;
     uint32_t             need_x87check; // x87 low precision check
+    int                  x87round_active; // we are in the middle of x87_setround and x87_restoreround
     uint32_t             need_dump;     // need to dump the block
     int                  need_reloc; // does the dynablock need relocations
     int                  reloc_size;

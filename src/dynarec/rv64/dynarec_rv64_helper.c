@@ -1612,11 +1612,10 @@ int sse_get_reg_empty(dynarec_rv64_t* dyn, int ninst, int s1, int a, int single)
         }
 
         if (dyn->e.ssecache[a].single != single) {
-            if (single) {
-                // writing back the float
+            if (dyn->e.ssecache[a].single)
                 FSW(dyn->e.ssecache[a].reg, xEmu, offsetof(x64emu_t, xmm[a]));
-                // there is no need to clear upper bits, it's cleared manually when needed.
-            }
+            else
+                FSD(dyn->e.ssecache[a].reg, xEmu, offsetof(x64emu_t, xmm[a]));
             dyn->e.olds[a].changed = 1;
             dyn->e.olds[a].purged = 0;
             dyn->e.olds[a].reg = EXTIDX(dyn->e.ssecache[a].reg);
@@ -2079,12 +2078,13 @@ static int findCacheSlot(dynarec_rv64_t* dyn, int ninst, int t, int n, extcache_
     return -1;
 }
 
-static void swapCache(dynarec_rv64_t* dyn, int ninst, int i, int j, extcache_t* cache)
+static void swapCache(dynarec_rv64_t* dyn, int ninst, int s1, int i, int j, extcache_t* cache)
 {
     if (i == j) return;
 
     if (cache->extcache[i].t == EXT_CACHE_XMMR || cache->extcache[i].t == EXT_CACHE_XMMW
         || cache->extcache[j].t == EXT_CACHE_XMMR || cache->extcache[j].t == EXT_CACHE_XMMW) {
+        SET_CACHE_VECTOR_WIDTH(s1);
         int reg_i = EXTREG(i);
         int reg_j = EXTREG(j);
         if (!cache->extcache[i].v) {
@@ -2143,6 +2143,7 @@ static void loadCache(dynarec_rv64_t* dyn, int ninst, int stack_cnt, int s1, int
 {
     int reg = EXTREG(i);
     if (cache->extcache[i].v && (cache->extcache[i].t == EXT_CACHE_XMMR || cache->extcache[i].t == EXT_CACHE_XMMW)) {
+        SET_CACHE_VECTOR_WIDTH(s1);
         int j = i + 1;
         while (cache->extcache[j].v)
             ++j;
@@ -2170,7 +2171,7 @@ static void loadCache(dynarec_rv64_t* dyn, int ninst, int stack_cnt, int s1, int
         case EXT_CACHE_XMMR:
         case EXT_CACHE_XMMW:
             MESSAGE(LOG_DUMP, "\t  - Loading %s\n", getCacheName(t, n));
-            SET_ELEMENT_WIDTH(s1, VECTOR_SEWANY, 0);
+            SET_CACHE_VECTOR_WIDTH(s1);
             ADDI(s1, xEmu, offsetof(x64emu_t, xmm[n]));
             VLE_V(reg, s1, dyn->vector_eew, VECTOR_UNMASKED, VECTOR_NFIELD1);
             break;
@@ -2240,7 +2241,7 @@ static void unloadCache(dynarec_rv64_t* dyn, int ninst, int stack_cnt, int s1, i
             break;
         case EXT_CACHE_XMMW:
             MESSAGE(LOG_DUMP, "\t  - Unloading %s\n", getCacheName(t, n));
-            SET_ELEMENT_WIDTH(s1, VECTOR_SEWANY, 0);
+            SET_CACHE_VECTOR_WIDTH(s1);
             ADDI(s1, xEmu, offsetof(x64emu_t, xmm[n]));
             VSE_V(reg, s1, dyn->vector_eew, VECTOR_UNMASKED, VECTOR_NFIELD1);
             break;
@@ -2376,7 +2377,7 @@ static void fpuCacheTransform(dynarec_rv64_t* dyn, int ninst, int s1, int s2, in
                 else {
                     // it's here, lets swap if needed
                     if (j != i)
-                        swapCache(dyn, ninst, i, j, &cache);
+                        swapCache(dyn, ninst, s1, i, j, &cache);
                 }
             }
             if (cache.extcache[i].t != cache_i2.extcache[i].t) {
@@ -2413,7 +2414,7 @@ static void fpuCacheTransform(dynarec_rv64_t* dyn, int ninst, int s1, int s2, in
                 } else if (cache.extcache[i].t == EXT_CACHE_XMMW && cache_i2.extcache[i].t == EXT_CACHE_XMMR) {
                     // refresh cache...
                     MESSAGE(LOG_DUMP, "\t  - Refreh %s\n", getCacheName(cache.extcache[i].t, cache.extcache[i].n));
-                    SET_ELEMENT_WIDTH(s1, VECTOR_SEWANY, 0);
+                    SET_CACHE_VECTOR_WIDTH(s1);
                     ADDI(s1, xEmu, offsetof(x64emu_t, xmm[cache.extcache[i].n]));
                     VSE_V(EXTREG(i), s1, dyn->vector_eew, VECTOR_UNMASKED, VECTOR_NFIELD1);
                     cache.extcache[i].t = EXT_CACHE_XMMR;
@@ -2446,6 +2447,8 @@ static void fpuCacheTransform(dynarec_rv64_t* dyn, int ninst, int s1, int s2, in
         s3_top = 0;
         stack_cnt = cache_i2.stack;
     }
+    if (dyn->vector_sew != VECTOR_SEWNA)
+        dyn->vector_eew = vector_vsetvli(dyn, ninst, s1, dyn->vector_sew, VECTOR_LMUL1, 1);
     MESSAGE(LOG_DUMP, "\t---- Cache Transform\n");
 }
 static void flagsCacheTransform(dynarec_rv64_t* dyn, int ninst, int s1)

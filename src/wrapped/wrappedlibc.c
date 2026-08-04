@@ -657,6 +657,12 @@ int EXPORT my___cxa_atexit(x64emu_t* emu, void* p, void* a, void* dso_handle)
     AddCleanup1Arg(emu, p, a, FindElfAddress(my_context, (uintptr_t)dso_handle));
     return 0;
 }
+int EXPORT my___cxa_at_quick_exit(x64emu_t* emu, void* p, void* dso_handle)
+{
+    (void)dso_handle; // glibc stores it but never uses it for quick_exit
+    AddQuickCleanup(emu, p);
+    return 0;
+}
 void EXPORT my___cxa_finalize(x64emu_t* emu, void* p)
 {
     if(!p) {
@@ -670,6 +676,16 @@ int EXPORT my_atexit(x64emu_t* emu, void *p)
 {
     AddCleanup(emu, p);
     return 0;
+}
+int EXPORT my_at_quick_exit(x64emu_t* emu, void *p)
+{
+    AddQuickCleanup(emu, p);
+    return 0;
+}
+void EXPORT my_quick_exit(x64emu_t* emu, int status)
+{
+    CallQuickCleanup(emu, status);
+    quick_exit(status);
 }
 
 int my_getcontext(x64emu_t* emu, void* ucp);
@@ -1568,9 +1584,9 @@ EXPORT void my_vwarnx(x64emu_t* emu, void* fmt, x64_va_list_t b) {
 
 EXPORT void my_argp_failure(x64emu_t* emu, void* state, int status, int errnum, void* fmt, void* b) {
 #if defined(HAVE_ARGP)
-    if(!fmt) { 
-        argp_failure(state, status, errnum, NULL); 
-        return; 
+    if(!fmt) {
+        argp_failure(state, status, errnum, NULL);
+        return;
     }
     myStackAlign(emu, (const char*)fmt, b, emu->scratch, R_EAX, 4);
     PREPARE_VALIST;
@@ -3003,7 +3019,7 @@ EXPORT int32_t my_execvpe(x64emu_t* emu, const char* path, char* argv[], char* c
             x86 = my_context->box86path?FileIsX86ELF(fullpath):0;
             script = (my_context->bashpath && FileIsShell(fullpath))?1:0;
             python = (my_context->pythonpath && FileIsPython(fullpath))?1:0;
-        } else 
+        } else
             printf_log(LOG_INFO, "Warning, trying to launch " SRLC " without BOX64_PRESSURE_ENV_PATH set\n");
 
     }
@@ -3031,7 +3047,7 @@ EXPORT int32_t my_execvpe(x64emu_t* emu, const char* path, char* argv[], char* c
                         strncat(buffsrlc, srlc+strlen(SRLC), sizeof(buffsrlc)-1);
                         argv[2] = buffsrlc;
                         printf_log(LOG_DEBUG, "Changed path of %s\n", SRLC);
-                    } else 
+                    } else
                         printf_log(LOG_INFO, "Warning, trying to launch " SRLC " without BOX64_PRESSURE_ENV_PATH set\n");
                 }
                 strncpy(buff, argv[2], sizeof(buff)-1);
@@ -3583,12 +3599,126 @@ int last_mmap_idx = 0;
 void* last_mmap_0_addr = NULL;
 size_t last_mmap_0_len = 0;
 #endif
+
+static int is_pe_file(int fd)
+{
+    unsigned char magic[4];
+    unsigned char offset[4];
+    if (pread(fd, magic, sizeof(magic), 0) != (ssize_t)sizeof(magic)) return 0;
+    if (magic[0] != 'M' || magic[1] != 'Z') return 0;
+    if (pread(fd, offset, sizeof(offset), 0x3c) != (ssize_t)sizeof(offset)) return 0;
+    uint32_t pe_offset = (uint32_t)offset[0] | (uint32_t)offset[1]<<8 | (uint32_t)offset[2]<<16 | (uint32_t)offset[3]<<24;
+    if (pread(fd, magic, sizeof(magic), pe_offset) != (ssize_t)sizeof(magic)) return 0;
+    return !memcmp(magic, "PE\0\0", sizeof(magic));
+}
+
+static int is_elf_or_pe(int fd)
+{
+    unsigned char magic[4];
+    if (pread(fd, magic, sizeof(magic), 0) != (ssize_t)sizeof(magic)) return 0;
+    return !memcmp(magic, "\x7f" "ELF", sizeof(magic)) || is_pe_file(fd);
+}
+
+static int is_writable_mapping(uintptr_t start, uintptr_t end)
+{
+    for(uintptr_t page = start; page < end; page += box64_pagesize)
+        if(!memExist(page) || !(getProtection(page) & PROT_WRITE)) return 0;
+    return 1;
+}
+
+static int can_copy_pe_mmap(int fd, size_t size, ssize_t offset)
+{
+    struct stat st;
+    if(offset < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_size < offset) return 0;
+    return size <= (uint64_t)(st.st_size - offset) && is_pe_file(fd);
+}
+
+static int pread_mmap(int fd, void* addr, size_t size, ssize_t offset)
+{
+    size_t done = 0;
+    while(done < size) {
+        ssize_t ret = pread(fd, (char*)addr + done, size - done, offset + (off_t)done);
+        if(ret > 0) {
+            done += ret;
+            continue;
+        }
+        if(ret < 0 && errno == EINTR) continue;
+        if(!ret) errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+
 EXPORT void* my_mmap64(x64emu_t* emu, void *addr, size_t length, int prot, int flags, int fd, ssize_t offset)
 {
     (void)emu;
     if(BOX64ENV(dynarec_log)>=LOG_DEBUG) {printf_log(LOG_NONE, "mmap64(%p, 0x%zx, 0x%x, 0x%x, %d, %zd) ", addr, length, prot, flags, fd, offset);}
-    void* ret = box_mmap(addr, length, prot, flags, fd, offset);
-    int e = errno;
+
+    // 1. non4k pagesize
+    // 2. fixed and anonymous mapping
+    // 3. PROT_NONE
+    // 4. small and unaligned to host pagesize
+    // 5. start and end both belongs to existing map
+    // --> the application is trying to place some 4k PROT_NONE canary page in between!
+    //     that's not gonna work on larger pagesize host no matter how, so just return success and do nothing.
+    uintptr_t start = (uintptr_t)addr;
+    uintptr_t end = start + length;
+    uintptr_t mapped_end = (end + X86_PAGE_SIZE - 1) & ~(X86_PAGE_SIZE - 1);
+    if(box64_pagesize > X86_PAGE_SIZE && addr && length && end > start && !prot &&
+       (flags & MAP_FIXED) && (flags & MAP_ANONYMOUS) &&
+       ((start & (box64_pagesize - 1)) || (end & (box64_pagesize - 1))) &&
+       getProtection(start) && getProtection(end - 1)) {
+        return addr;
+    }
+
+    void* ret;
+    int e;
+    uintptr_t host_start = start & ~(box64_pagesize - 1);
+    uintptr_t host_end = (mapped_end + box64_pagesize - 1) & ~(box64_pagesize - 1);
+
+    // For Wine: a fixed anonymous guest mapping that fits inside an already existing host page.
+    // temporarily makes the whole host page writable, clears only the requested 4KB guest range,
+    // reports the mapping as successful
+    if(box64_pagesize > X86_PAGE_SIZE && addr && length && end > start && mapped_end >= end &&
+       !(start & (X86_PAGE_SIZE - 1)) && (flags & MAP_FIXED) && (flags & MAP_ANONYMOUS) &&
+       (flags & MAP_PRIVATE) && !(flags & MAP_SHARED) && fd == -1 && !offset && prot &&
+       host_start == ((mapped_end - 1) & ~(box64_pagesize - 1)) &&
+       (start != host_start || mapped_end != host_start + box64_pagesize) &&
+       memExist(host_start) && memExist(host_start + box64_pagesize - 1)) {
+        uint32_t old_prot = getProtection(host_start);
+        int host_prot = prot | (old_prot & ~PROT_CUSTOM);
+        if(host_prot & PROT_WRITE) host_prot |= PROT_READ;
+        int write_prot = host_prot | PROT_READ | PROT_WRITE;
+        if(mprotect((void*)host_start, box64_pagesize, write_prot)) {
+            ret = MAP_FAILED;
+        } else {
+            memset(addr, 0, mapped_end - start);
+            if(write_prot != host_prot && mprotect((void*)host_start, box64_pagesize, host_prot))
+                ret = MAP_FAILED;
+            else {
+                prot = host_prot | (old_prot & PROT_CUSTOM);
+                ret = addr;
+            }
+        }
+        e = errno;
+    // Also For Wine: Wine loads PE sections into memory it has already reserved.
+    // On hosts with pages larger than 4K, mmap would corrupted adjacent reserved (BSS) memory,
+    // so copy only the 4K pages Wine requested.
+    } else if(box64_wine && box64_pagesize > X86_PAGE_SIZE && addr && length && end > start &&
+              mapped_end >= end && host_end && start == host_start && mapped_end != host_end &&
+              (flags & MAP_FIXED) && (flags & MAP_PRIVATE) && !(flags & (MAP_SHARED | MAP_ANONYMOUS)) &&
+              fd >= 0 && offset >= 0 && (prot & PROT_WRITE) &&
+              is_writable_mapping(host_start, host_end) &&
+              can_copy_pe_mmap(fd, mapped_end - start, offset)) {
+        if(pread_mmap(fd, addr, mapped_end - start, offset))
+            ret = MAP_FAILED;
+        else
+            ret = addr;
+        e = errno;
+    } else {
+        ret = box_mmap(addr, length, prot, flags, fd, offset);
+        e = errno;
+    }
     if(emu && box64_is32bits && ret!=MAP_FAILED && ((ret>(void*)0xc0000000) || (ret+length>(void*)0xc0000000))) {
         // do not allow allocating memory that high for 32bits process
         box_munmap(ret, length);
@@ -3614,9 +3744,13 @@ EXPORT void* my_mmap64(x64emu_t* emu, void *addr, size_t length, int prot, int f
     if(ret!=MAP_FAILED) {
         if (emu && !(flags & MAP_ANONYMOUS) && (fd > 0)) {
             // the last_mmap will allow mmap created by wine, even those that have hole, to be fully tracked as one single mmap
-            if((ret>=last_mmap_addr[0]) && ret+length<(last_mmap_addr[0]+last_mmap_len[0]))
+            // check if the file is actually a PE file to be safe.
+            int in_last_mmap_0 = (ret >= last_mmap_addr[0]) && ret + length < (last_mmap_addr[0] + last_mmap_len[0]);
+            int in_last_mmap_1 = (ret >= last_mmap_addr[1]) && ret + length < (last_mmap_addr[1] + last_mmap_len[1]);
+            int is_executable = (in_last_mmap_0 || in_last_mmap_1) && is_elf_or_pe(fd);
+            if (is_executable && in_last_mmap_0)
                 RecordEnvMappings((uintptr_t)last_mmap_addr[0], last_mmap_len[0], fd);
-            else if((ret>=last_mmap_addr[1]) && ret+length<(last_mmap_addr[1]+last_mmap_len[1]))
+            else if (is_executable && in_last_mmap_1)
                 RecordEnvMappings((uintptr_t)last_mmap_addr[1], last_mmap_len[1], fd);
             else
                 RecordEnvMappings((uintptr_t)ret, length, fd);
@@ -3754,11 +3888,90 @@ EXPORT int my_mprotect(x64emu_t* emu, void *addr, unsigned long len, int prot)
     if(emu && (BOX64ENV(log)>=LOG_DEBUG || BOX64ENV(dynarec_log)>=LOG_DEBUG)) {printf_log(LOG_NONE, "mprotect(%p, 0x%lx, 0x%x)\n", addr, len, prot);}
     if(prot&PROT_WRITE)
         prot|=PROT_READ;    // PROT_READ is implicit with PROT_WRITE on x86_64
-    int ret = mprotect(addr, len, prot);
-    if(!ret && len) {
-        updateProtection((uintptr_t)addr, len, prot);
+    uintptr_t start = (uintptr_t)addr;
+    if(box64_pagesize == X86_PAGE_SIZE) {
+        int ret = mprotect(addr, len, prot);
+        if(!ret && len) updateProtection(start, len, prot);
+        return ret;
     }
+    if(start & (X86_PAGE_SIZE - 1)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(!len) return 0;
+    uintptr_t end = (start + len + X86_PAGE_SIZE - 1) & ~(X86_PAGE_SIZE - 1);
+    uintptr_t host_start = start & ~(box64_pagesize - 1);
+    uintptr_t host_end = (end + box64_pagesize - 1) & ~(box64_pagesize - 1);
+
+    if(host_end - host_start == box64_pagesize && (start != host_start || end != host_end)) {
+        prot |= getProtection(host_start) & ~PROT_CUSTOM;
+        int ret = mprotect((void*)host_start, box64_pagesize, prot);
+        if(!ret) updateProtection(host_start, box64_pagesize, prot);
+        return ret;
+    }
+
+    if(start != host_start) {
+        int host_prot = prot | (getProtection(host_start) & ~PROT_CUSTOM);
+        int ret = mprotect((void*)host_start, box64_pagesize, host_prot);
+        if(ret) return -1;
+        updateProtection(host_start, box64_pagesize, host_prot);
+        host_start += box64_pagesize;
+    }
+    if(end != host_end) {
+        host_end -= box64_pagesize;
+        int host_prot = prot | (getProtection(host_end) & ~PROT_CUSTOM);
+        int ret = mprotect((void*)host_end, box64_pagesize, host_prot);
+        if(ret) return -1;
+        updateProtection(host_end, box64_pagesize, host_prot);
+    }
+    if(host_start == host_end) return 0;
+    int ret = mprotect((void*)host_start, host_end - host_start, prot);
+    if(!ret) updateProtection(host_start, host_end - host_start, prot);
     return ret;
+}
+
+EXPORT int my_madvise(x64emu_t* emu, void* addr, size_t length, int advice)
+{
+    (void)emu;
+    uintptr_t start = (uintptr_t)addr;
+    if(start & (X86_PAGE_SIZE - 1)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(!length) return 0;
+    uintptr_t end = (start + length + X86_PAGE_SIZE - 1) & ~(X86_PAGE_SIZE - 1);
+
+    if(advice != MADV_DONTNEED) {
+        uintptr_t host_start = start & ~(box64_pagesize - 1);
+        uintptr_t host_end = (end + box64_pagesize - 1) & ~(box64_pagesize - 1);
+        return madvise((void*)host_start, host_end - host_start, advice);
+    }
+
+    if(box64_pagesize == X86_PAGE_SIZE) return madvise(addr, end - start, advice);
+
+    if(!(start & (box64_pagesize - 1)) && !(end & (box64_pagesize - 1)))
+        return madvise(addr, end - start, advice);
+
+    if(!memExist(start) || !memExist(end - 1)) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    if(IsAddrElfOrFileMapped(start) || IsAddrElfOrFileMapped(end - 1)) return 0;
+
+    if(!(getProtection(start) & PROT_WRITE) || !(getProtection(end - 1) & PROT_WRITE)) return 0;
+
+    memset((void*)start, 0, end - start);
+    return 0;
+}
+
+EXPORT int my___madvise(x64emu_t* emu, void* addr, size_t length, int advice) __attribute__((alias("my_madvise")));
+
+EXPORT int my_posix_madvise(x64emu_t* emu, void* addr, size_t length, int advice)
+{
+    (void)emu;
+    if(advice == POSIX_MADV_DONTNEED) return 0;
+    return posix_madvise(addr, length, advice);
 }
 
 typedef struct mallinfo (*mallinfo_fnc)(void);
@@ -4086,10 +4299,17 @@ EXPORT int my_semctl(int semid, int semnum, int cmd, union semun b)
 EXPORT int64_t userdata_sign = 0x1234598765ABCEF0;
 EXPORT uint32_t userdata[1024];
 
+int isProcessBox64(pid_t pid)
+{
+    if(ptrace(PTRACE_PEEKDATA, pid, &userdata_sign, NULL)==userdata_sign)
+        return 1;
+    return 0;
+}
+
 EXPORT long my_ptrace(x64emu_t* emu, int request, pid_t pid, void* addr, uint32_t* data)
 {
     if(request == PTRACE_POKEUSER) {
-        if(ptrace(PTRACE_PEEKDATA, pid, &userdata_sign, NULL)==userdata_sign  && (uintptr_t)addr < sizeof(my_x64_user_t)) {
+        if(isProcessBox64(pid)  && (uintptr_t)addr < sizeof(my_x64_user_t)) {
         //printf_log_prefix(2, LOG_INFO, "Using ptrace POKE at %p for 0x%x (userdata 0x%x)\n", addr, pid, data);
             long ret = ptrace(PTRACE_POKEDATA, pid, addr+(uintptr_t)userdata, data);
             return ret;
@@ -4106,7 +4326,7 @@ EXPORT long my_ptrace(x64emu_t* emu, int request, pid_t pid, void* addr, uint32_
         return -1;
     }
     if(request == PTRACE_PEEKUSER) {
-        if(ptrace(PTRACE_PEEKDATA, pid, &userdata_sign, NULL)==userdata_sign  && (uintptr_t)addr < sizeof(my_x64_user_t)) {
+        if(isProcessBox64(pid)  && (uintptr_t)addr < sizeof(my_x64_user_t)) {
             long ret = ptrace(PTRACE_PEEKDATA, pid, addr+(uintptr_t)userdata, data);
             if((uintptr_t)addr==offsetof(my_x64_user_t, u_debugreg[6])) {
                 // clean up DR6...
@@ -4592,7 +4812,7 @@ EXPORT void my__exit(x64emu_t* emu, int code)
     box64_exit_code = code;
     SerializeAllMapping();   // just to be safe
     // then call all the fini
-    
+
     _exit(code);
 }
 
@@ -4826,7 +5046,16 @@ __attribute__((weak)) int dn_skipname(const unsigned char* ptr, const unsigned c
 #ifndef _SC_NPROCESSORS_CONF
 #define _SC_NPROCESSORS_CONF    83
 #endif
+EXPORT int my_getpagesize(x64emu_t* emu) {
+    (void)emu;
+    return X86_PAGE_SIZE;
+}
+EXPORT int my___getpagesize(x64emu_t* emu) __attribute__((alias("my_getpagesize")));
+
 EXPORT long my_sysconf(x64emu_t* emu, int what) {
+    if(what==_SC_PAGESIZE) {
+        return X86_PAGE_SIZE;
+    }
     if(what==_SC_NPROCESSORS_ONLN) {
         return box64_sysinfo.box64_ncpu;
     }
@@ -4839,13 +5068,42 @@ EXPORT long my___sysconf(x64emu_t* emu, int what) __attribute__((alias("my_sysco
 
 EXPORT int my_sched_getaffinity(x64emu_t* emu, pid_t pid, size_t sz, cpu_set_t* mask)
 {
-    if(!BOX64ENV(skipcpu))
+    uint32_t skipcpu=0, maxcpu=0;
+    if(pid && pid!=getpid()) {
+        // another process, so check if it's a box64 compatible one
+        int attached = 0;
+        errno = 0;
+        long test = ptrace(PTRACE_PEEKDATA, pid, (void*)0, NULL);
+        if (test == -1 && errno == ESRCH) {
+            if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != -1) {
+                int status;
+                if (waitpid(pid, &status, __WALL) != -1) {
+                    if(isProcessBox64(pid)) {
+                        // gather other process skip & maxcpu
+                        skipcpu = ptrace(PTRACE_PEEKDATA, pid, &BOX64ENV(skipcpu), NULL);
+                        maxcpu = ptrace(PTRACE_PEEKDATA, pid, &BOX64ENV(maxcpu), NULL);
+                    }
+                }
+                ptrace(PTRACE_DETACH, pid, NULL, NULL);
+            }
+        } else if(errno==0) {
+            if(isProcessBox64(pid)) {
+                // gather other process skip & maxcpu
+                skipcpu = ptrace(PTRACE_PEEKDATA, pid, &BOX64ENV(skipcpu), NULL);
+                maxcpu = ptrace(PTRACE_PEEKDATA, pid, &BOX64ENV(maxcpu), NULL);
+            }
+        }
+    } else {
+        skipcpu = BOX64ENV(skipcpu);
+        maxcpu = BOX64ENV(maxcpu);
+    }
+    if(!skipcpu)
         return sched_getaffinity(pid, sz, mask);
     uint8_t mask_[sz];
     int ret = sched_getaffinity(pid, sz, (cpu_set_t*)mask_);
     if(ret>=0) {
-        cpumask_shiftright(mask_, sz, BOX64ENV(skipcpu));
-        cpumask_maxcpu(mask, sz, BOX64ENV(maxcpu));
+        cpumask_shiftright(mask_, sz, skipcpu);
+        cpumask_maxcpu(mask, sz, maxcpu);
         memcpy(mask, mask_, sz);
     }
     return ret;
@@ -4861,12 +5119,41 @@ EXPORT int my_sched_getcpu(x64emu_t* emu)
 }
 EXPORT int my_sched_setaffinity(x64emu_t* emu, pid_t pid, size_t sz, cpu_set_t* mask)
 {
-    if(!BOX64ENV(skipcpu))
+    uint32_t skipcpu=0, maxcpu=0;
+    if(pid && pid!=getpid()) {
+        // another process, so check if it's a box64 compatible one
+        int attached = 0;
+        errno = 0;
+        long test = ptrace(PTRACE_PEEKDATA, pid, (void*)0, NULL);
+        if (test == -1 && errno == ESRCH) {
+            if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != -1) {
+                int status;
+                if (waitpid(pid, &status, __WALL) != -1) {
+                    if(isProcessBox64(pid)) {
+                        // gather other process skip & maxcpu
+                        skipcpu = ptrace(PTRACE_PEEKDATA, pid, &BOX64ENV(skipcpu), NULL);
+                        maxcpu = ptrace(PTRACE_PEEKDATA, pid, &BOX64ENV(maxcpu), NULL);
+                    }
+                }
+                ptrace(PTRACE_DETACH, pid, NULL, NULL);
+            }
+        } else if(errno==0) {
+            if(isProcessBox64(pid)) {
+                // gather other process skip & maxcpu
+                skipcpu = ptrace(PTRACE_PEEKDATA, pid, &BOX64ENV(skipcpu), NULL);
+                maxcpu = ptrace(PTRACE_PEEKDATA, pid, &BOX64ENV(maxcpu), NULL);
+            }
+        }
+    } else {
+        skipcpu = BOX64ENV(skipcpu);
+        maxcpu = BOX64ENV(maxcpu);
+    }
+    if(!skipcpu)
         return sched_setaffinity(pid, sz, mask);
     uint8_t mask_[sz];
     memcpy(mask_, mask, sz);
-    cpumask_maxcpu(mask, sz, BOX64ENV(maxcpu));
-    cpumask_shiftleft(mask_, sz, BOX64ENV(skipcpu));
+    cpumask_maxcpu(mask, sz, maxcpu);
+    cpumask_shiftleft(mask_, sz, skipcpu);
     return sched_setaffinity(pid, sz, (cpu_set_t*)mask_);
 }
 

@@ -75,6 +75,115 @@
 #define UP32_READALL()  ((void)0)
 #endif
 
+#define COMIS_FCC fcc7
+
+static inline int comis_fuse_cond(int condition)
+{
+    switch (condition) {
+        case X64_JMP_JC:
+        case X64_JMP_JNC:
+        case X64_JMP_JZ:
+        case X64_JMP_JNZ:
+        case X64_JMP_JBE:
+        case X64_JMP_JNBE:
+        case X64_JMP_JP:
+        case X64_JMP_JNP: return condition;
+        default: return -1;
+    }
+}
+
+static inline int comis_fuse_fcmp(int condition)
+{
+    switch (condition) {
+        case X64_JMP_JC:
+        case X64_JMP_JNC: return cULT;
+        case X64_JMP_JZ:
+        case X64_JMP_JNZ: return cUEQ;
+        case X64_JMP_JBE:
+        case X64_JMP_JNBE: return cULE;
+        default: return cUN;
+    }
+}
+
+static inline int comis_fuse_inverted(int condition)
+{
+    switch (condition) {
+        case X64_JMP_JNC:
+        case X64_JMP_JNZ:
+        case X64_JMP_JNBE:
+        case X64_JMP_JNP: return 1;
+        default: return 0;
+    }
+}
+
+#if STEP == 0
+#define COMIS_MARK()                                                  \
+    do {                                                              \
+        dyn->insts[ninst].comis_mark = BOX64ENV(dynarec_nativeflags); \
+    } while (0)
+
+#define COMIS_JCC(I)                                             \
+    do {                                                         \
+        if (BOX64ENV(dynarec_nativeflags))                       \
+            dyn->insts[ninst].comis_fusion = comis_fuse_cond(I); \
+    } while (0)
+
+#define COMIS_FUSED() 0
+#else
+#define COMIS_MARK()  ((void)0)
+#define COMIS_JCC(I)  ((void)(I))
+#define COMIS_FUSED() (dyn->insts[ninst].comis_fusion >= 0)
+#endif
+
+#define COMIS_BRANCH_NOT_TAKEN(offset, jmp)                      \
+    do {                                                         \
+        if (comis_fuse_inverted(dyn->insts[ninst].comis_fusion)) \
+            BCNEZ_safe(COMIS_FCC, offset, jmp);                  \
+        else                                                     \
+            BCEQZ_safe(COMIS_FCC, offset, jmp);                  \
+    } while (0)
+#define COMIS_BRANCH_TAKEN(offset, jmp)                          \
+    do {                                                         \
+        if (comis_fuse_inverted(dyn->insts[ninst].comis_fusion)) \
+            BCEQZ_safe(COMIS_FCC, offset, jmp);                  \
+        else                                                     \
+            BCNEZ_safe(COMIS_FCC, offset, jmp);                  \
+    } while (0)
+
+#define COMIS_SPILL_S() \
+    IFX (X_ALL) { SPILL_EFLAGS(); }
+#define COMIS_SPILL_D() SPILL_EFLAGS()
+#define EMIT_COMIS_FLAGS(type, lhs, rhs, tmp)                                                  \
+    do {                                                                                       \
+        COMIS_MARK();                                                                          \
+        if (COMIS_FUSED())                                                                     \
+            FCMP_##type(COMIS_FCC, lhs, rhs, comis_fuse_fcmp(dyn->insts[ninst].comis_fusion)); \
+        if (!COMIS_FUSED() || dyn->insts[ninst].x64.gen_flags) {                               \
+            CLEAR_FLAGS(tmp);                                                                  \
+            IFX (X_ZF | X_PF | X_CF) {                                                         \
+                FCMP_##type(fcc0, lhs, rhs, cUN);                                              \
+                BCEQZ_MARK(fcc0);                                                              \
+                ORI(xFlags, xFlags, (1 << F_ZF) | (1 << F_PF) | (1 << F_CF));                  \
+                B_MARK3_nocond;                                                                \
+            }                                                                                  \
+            MARK;                                                                              \
+            IFX (X_CF) {                                                                       \
+                FCMP_##type(fcc1, lhs, rhs, cLT);                                              \
+                BCEQZ_MARK2(fcc1);                                                             \
+                ORI(xFlags, xFlags, 1 << F_CF);                                                \
+                B_MARK3_nocond;                                                                \
+            }                                                                                  \
+            MARK2;                                                                             \
+            IFX (X_ZF) {                                                                       \
+                FCMP_##type(fcc2, lhs, rhs, cEQ);                                              \
+                BCEQZ_MARK3(fcc2);                                                             \
+                ORI(xFlags, xFlags, 1 << F_ZF);                                                \
+            }                                                                                  \
+            MARK3;                                                                             \
+            COMIS_SPILL_##type();                                                              \
+        }                                                                                      \
+    } while (0)
+
 #define MARKREGd(r)          \
     do {                     \
         if (rex.w)           \
@@ -1105,24 +1214,36 @@
     READFLAGS(A)
 #endif
 
-#define NAT_FLAGS_OPS(op1, op2, s1, s2)                                     \
-    do {                                                                    \
-        dyn->insts[dyn->insts[ninst].nat_next_inst].nat_flags_op1 = op1;    \
-        dyn->insts[dyn->insts[ninst].nat_next_inst].nat_flags_op2 = op2;    \
-        if (dyn->insts[ninst + 1].no_scratch_usage && IS_GPR(op1)) {        \
-            if (dyn->insts[ninst].up32_read & (1 << TO_X64(op1)))           \
-                MV(s1, op1);                                                \
-            else                                                            \
-                ZEROUP2(s1, op1);                                           \
-            dyn->insts[dyn->insts[ninst].nat_next_inst].nat_flags_op1 = s1; \
-        }                                                                   \
-        if (dyn->insts[ninst + 1].no_scratch_usage && IS_GPR(op2)) {        \
-            if (dyn->insts[ninst].up32_read & (1 << TO_X64(op2)))           \
-                MV(s2, op2);                                                \
-            else                                                            \
-                ZEROUP2(s2, op2);                                           \
-            dyn->insts[dyn->insts[ninst].nat_next_inst].nat_flags_op2 = s2; \
-        }                                                                   \
+#define NAT_FLAGS_OPS(op1, op2, s1, s2)                                            \
+    do {                                                                           \
+        int nat_op1 = op1;                                                         \
+        int nat_op2 = op2;                                                         \
+        int nat_next = dyn->insts[ninst].nat_next_inst;                            \
+        int nat_last = nat_next;                                                   \
+        while (nat_last && dyn->insts[nat_last].nat_next_inst)                     \
+            nat_last = dyn->insts[nat_last].nat_next_inst;                         \
+        int nat_copy = 0;                                                          \
+        for (int nat_i = ninst + 1; nat_i < nat_last; ++nat_i)                     \
+            if (dyn->insts[nat_i].no_scratch_usage)                                \
+                nat_copy = 1;                                                      \
+        if (nat_copy && IS_GPR(nat_op1)) {                                         \
+            if (dyn->insts[ninst].up32_read & (1 << TO_X64(nat_op1)))              \
+                MV(s1, nat_op1);                                                   \
+            else                                                                   \
+                ZEROUP2(s1, nat_op1);                                              \
+            nat_op1 = s1;                                                          \
+        }                                                                          \
+        if (nat_copy && IS_GPR(nat_op2)) {                                         \
+            if (dyn->insts[ninst].up32_read & (1 << TO_X64(nat_op2)))              \
+                MV(s2, nat_op2);                                                   \
+            else                                                                   \
+                ZEROUP2(s2, nat_op2);                                              \
+            nat_op2 = s2;                                                          \
+        }                                                                          \
+        for (int nat_i = nat_next; nat_i; nat_i = dyn->insts[nat_i].nat_next_inst) { \
+            dyn->insts[nat_i].nat_flags_op1 = nat_op1;                             \
+            dyn->insts[nat_i].nat_flags_op2 = nat_op2;                             \
+        }                                                                          \
     } while (0)
 
 #define NAT_FLAGS_ENABLE_CARRY() dyn->insts[ninst].nat_flags_carry = 1
@@ -1449,7 +1570,7 @@
 #define x87_unreflectcount    STEPNAME(x87_unreflectcount)
 #define x87_purgecache        STEPNAME(x87_purgecache)
 
-#define sse_setround      STEPNAME(sse_setround)
+#define sse_fcsr3_from_mxcsr STEPNAME(sse_fcsr3_from_mxcsr)
 #define mmx_get_reg       STEPNAME(mmx_get_reg)
 #define mmx_get_reg_empty STEPNAME(mmx_get_reg_empty)
 #define sse_purge07cache  STEPNAME(sse_purge07cache)
@@ -1653,8 +1774,7 @@ void fpu_reflectcache(dynarec_la64_t* dyn, int ninst, int s1, int s2, int s3);
 void fpu_unreflectcache(dynarec_la64_t* dyn, int ninst, int s1, int s2, int s3);
 void fpu_pushcache(dynarec_la64_t* dyn, int ninst, int s1, int not07);
 void fpu_popcache(dynarec_la64_t* dyn, int ninst, int s1, int not07);
-// Set rounding according to mxcsr flags, return reg to restore flags
-int sse_setround(dynarec_la64_t* dyn, int ninst, int s1, int s2);
+void sse_fcsr3_from_mxcsr(dynarec_la64_t* dyn, int ninst, int s1);
 
 // SSE/SSE2 helpers
 // purge the XMM0..XMM7 cache (before function call)
@@ -1857,13 +1977,13 @@ uintptr_t dynarec64_DF(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
         break
 
 // Dummy macros
-#define B__safe(a, b, c) XOR(xZR, xZR, xZR)
-#define B_(a, b, c)      XOR(xZR, xZR, xZR)
-#define S_(a, b, c)      XOR(xZR, xZR, xZR)
-#define MV_(a, b, c, d)  XOR(xZR, xZR, xZR)
+#define B__safe(a, b, c, d) XOR(xZR, xZR, xZR)
+#define B_(a, b, c)       XOR(xZR, xZR, xZR)
+#define S_(a, b, c)       XOR(xZR, xZR, xZR)
+#define MV_(a, b, c, d)   XOR(xZR, xZR, xZR)
 
-#define NATIVEJUMP_safe(COND, val) \
-    B##COND##_safe(dyn->insts[ninst].nat_flags_op1, dyn->insts[ninst].nat_flags_op2, val);
+#define NATIVEJUMP_safe(COND, val, jmp) \
+    B##COND##_safe(dyn->insts[ninst].nat_flags_op1, dyn->insts[ninst].nat_flags_op2, val, jmp);
 
 #define NATIVEJUMP(COND, val) \
     B##COND(dyn->insts[ninst].nat_flags_op1, dyn->insts[ninst].nat_flags_op2, val);

@@ -136,15 +136,19 @@ typedef int32_t (*iFppipppp_t)(void*, void*, int32_t, void*, void*, void*, void*
 	GO(__stack_chk_fail, vFv_t) \
 	GO(_exit, vFi_t) \
 	GO(exit, vFi_t) \
+	GO(quick_exit, vFi_t) \
 	GO(_ITM_deregisterTMCloneTable, vFp_t) \
 	GO(_ZGTtdlPv, vFp_t) \
 	GO(__cxa_finalize, vFp_t) \
+	GO(__getpagesize, iFv_t) \
 	GO(fork, iFv_t) \
+	GO(getpagesize, iFv_t) \
 	GO(sched_getcpu, iFv_t) \
 	GO(vfork, iFv_t) \
 	GO(iopl, iFi_t) \
 	GO(__libc_dlclose, iFp_t) \
 	GO(_setjmp, iFp_t) \
+	GO(at_quick_exit, iFp_t) \
 	GO(atexit, iFp_t) \
 	GO(getcontext, iFp_t) \
 	GO(register_printf_type, iFp_t) \
@@ -189,6 +193,7 @@ typedef int32_t (*iFppipppp_t)(void*, void*, int32_t, void*, void*, void*, void*
 	GO(delete_module, iFpu_t) \
 	GO(fsopen, iFpu_t) \
 	GO(munmap, iFpL_t) \
+	GO(__cxa_at_quick_exit, iFpp_t) \
 	GO(__vprintf_chk, iFpp_t) \
 	GO(dl_iterate_phdr, iFpp_t) \
 	GO(execv, iFpp_t) \
@@ -200,6 +205,7 @@ typedef int32_t (*iFppipppp_t)(void*, void*, int32_t, void*, void*, void*, void*
 	GO(stat64, iFpp_t) \
 	GO(swapcontext, iFpp_t) \
 	GO(tss_create, iFpp_t) \
+	GO(__isoc23_scanf, iFpV_t) \
 	GO(__isoc99_scanf, iFpV_t) \
 	GO(execl, iFpV_t) \
 	GO(execle, iFpV_t) \
@@ -208,6 +214,7 @@ typedef int32_t (*iFppipppp_t)(void*, void*, int32_t, void*, void*, void*, void*
 	GO(scanf, iFpV_t) \
 	GO(wprintf, iFpV_t) \
 	GO(wscanf, iFpV_t) \
+	GO(__isoc23_vscanf, iFpA_t) \
 	GO(__isoc99_vscanf, iFpA_t) \
 	GO(vprintf, iFpA_t) \
 	GO(vscanf, iFpA_t) \
@@ -260,7 +267,10 @@ typedef int32_t (*iFppipppp_t)(void*, void*, int32_t, void*, void*, void*, void*
 	GO(__printf_chk, iFipV_t) \
 	GO(dprintf, iFipV_t) \
 	GO(vdprintf, iFipA_t) \
+	GO(__madvise, iFpLi_t) \
+	GO(madvise, iFpLi_t) \
 	GO(mprotect, iFpLi_t) \
+	GO(posix_madvise, iFpLi_t) \
 	GO(init_module, iFpLp_t) \
 	GO(ftw, iFppi_t) \
 	GO(ftw64, iFppi_t) \

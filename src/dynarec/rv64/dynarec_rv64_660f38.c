@@ -317,7 +317,7 @@ uintptr_t dynarec64_660F38(dynarec_rv64_t* dyn, uintptr_t addr, uint8_t opcode, 
                 case 0x17:
                     INST_NAME("PTEST Gx, Ex");
                     nextop = F8;
-                    SETFLAGS(X_ALL, SF_SET, NAT_FLAGS_NOFUSION);
+                    SETFLAGS(X_ALL, SF_SET_NODF, NAT_FLAGS_NOFUSION);
                     GETGX();
                     GETEX(x1, 0, 8);
                     CLEAR_FLAGS();
@@ -332,8 +332,7 @@ uintptr_t dynarec64_660F38(dynarec_rv64_t* dyn, uintptr_t addr, uint8_t opcode, 
                             AND(x6, x4, x2);
                             AND(x7, x5, x3);
                             OR(x6, x6, x7);
-                            BNEZ(x6, 4 + 4);
-                            ORI(xFlags, xFlags, 1 << F_ZF);
+                            SET_FLAGS_EQZ(x6, F_ZF, x7);
                         }
                         IFX (X_CF) {
                             NOT(x4, x4);
@@ -341,8 +340,7 @@ uintptr_t dynarec64_660F38(dynarec_rv64_t* dyn, uintptr_t addr, uint8_t opcode, 
                             AND(x6, x4, x2);
                             AND(x7, x5, x3);
                             OR(x6, x6, x7);
-                            BNEZ(x6, 4 + 4);
-                            ORI(xFlags, xFlags, 1 << F_CF);
+                            SET_FLAGS_EQZ(x6, F_CF, x7);
                         }
                     }
                     break;
@@ -875,7 +873,10 @@ uintptr_t dynarec64_660F38(dynarec_rv64_t* dyn, uintptr_t addr, uint8_t opcode, 
                     u8 = F8;
                     FEQS(x2, d0, d0);
                     BNEZ_MARK(x2);
-                    if (v0 != d0) FMVS(v0, d0);
+                    FMVXW(x3, d0);
+                    MOV32w(x4, 0x00400000);
+                    OR(x3, x3, x4);
+                    FMVWX(v0, x3);
                     B_NEXT_nocond;
                     MARK; // d0 is not nan
                     FABSS(v1, d0);
@@ -913,7 +914,10 @@ uintptr_t dynarec64_660F38(dynarec_rv64_t* dyn, uintptr_t addr, uint8_t opcode, 
                     u8 = F8;
                     FEQD(x2, d0, d0);
                     BNEZ_MARK(x2);
-                    if (v0 != d0) FMVD(v0, d0);
+                    FMVXD(x3, d0);
+                    MOV64x(x4, 0x0008000000000000ULL);
+                    OR(x3, x3, x4);
+                    FMVDX(v0, x3);
                     B_NEXT_nocond;
                     MARK; // d0 is not nan
                     FABSD(v1, d0);
@@ -1196,8 +1200,8 @@ uintptr_t dynarec64_660F38(dynarec_rv64_t* dyn, uintptr_t addr, uint8_t opcode, 
                     } else {
                         addr = geted(dyn, addr, ninst, nextop, &ed, x1, x2, &fixedaddress, rex, NULL, 0, 1);
                     }
-                    MV(x2, xRDX);
-                    MV(x4, xRAX);
+                    SEXT_W(x2, xRDX);
+                    SEXT_W(x4, xRAX);
                     u8 = F8;
                     ADDI(x5, xZR, u8);
                     CALL6(const_sse42_compare_string_explicit_len, x1, ed, x2, x3, x4, x5, 0);
@@ -1242,8 +1246,8 @@ uintptr_t dynarec64_660F38(dynarec_rv64_t* dyn, uintptr_t addr, uint8_t opcode, 
                     } else {
                         addr = geted(dyn, addr, ninst, nextop, &ed, x1, x2, &fixedaddress, rex, NULL, 0, 1);
                     }
-                    ZEXTW2(x2, xRDX);
-                    ZEXTW2(x4, xRAX);
+                    SEXT_W(x2, xRDX);
+                    SEXT_W(x4, xRAX);
                     u8 = F8;
                     ADDI(x5, xZR, u8);
                     CALL6(const_sse42_compare_string_explicit_len, x1, ed, x2, x3, x4, x5, 0);

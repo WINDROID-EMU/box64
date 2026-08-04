@@ -243,7 +243,6 @@
 #() iFpl
 #() iFpL
 #() iFpp
-#() iFpV
 #() iFpO
 #() iFpS
 #() iFpH
@@ -5480,12 +5479,15 @@ wrappedlibc:
 - vFi:
   - _exit
   - exit
+  - quick_exit
 - vFp:
   - _ITM_deregisterTMCloneTable
   - _ZGTtdlPv
   - __cxa_finalize
 - iFv:
+  - __getpagesize
   - fork
+  - getpagesize
   - sched_getcpu
   - vfork
 - iFi:
@@ -5493,6 +5495,7 @@ wrappedlibc:
 - iFp:
   - __libc_dlclose
   - _setjmp
+  - at_quick_exit
   - atexit
   - getcontext
   - register_printf_type
@@ -5557,6 +5560,7 @@ wrappedlibc:
 - iFpL:
   - munmap
 - iFpp:
+  - __cxa_at_quick_exit
   - __vprintf_chk
   - dl_iterate_phdr
   - execv
@@ -5569,6 +5573,7 @@ wrappedlibc:
   - swapcontext
   - tss_create
 - iFpV:
+  - __isoc23_scanf
   - __isoc99_scanf
   - execl
   - execle
@@ -5578,6 +5583,7 @@ wrappedlibc:
   - wprintf
   - wscanf
 - iFpA:
+  - __isoc23_vscanf
   - __isoc99_vscanf
   - vprintf
   - vscanf
@@ -5652,7 +5658,10 @@ wrappedlibc:
 - iFipA:
   - vdprintf
 - iFpLi:
+  - __madvise
+  - madvise
   - mprotect
+  - posix_madvise
 - iFpLp:
   - init_module
 - iFppi:
@@ -6147,11 +6156,27 @@ wrappedlibm:
 wrappedlibmvec:
 - vFv:
   - _ZGVbN2v_cos
+  - _ZGVbN2v_exp
+  - _ZGVbN2v_log
   - _ZGVbN2v_sin
   - _ZGVbN2vv_pow
   - _ZGVbN4v_cosf
+  - _ZGVbN4v_expf
+  - _ZGVbN4v_logf
   - _ZGVbN4v_sinf
   - _ZGVbN4vv_powf
+  - _ZGVcN4v_exp
+  - _ZGVcN4v_log
+  - _ZGVcN4vv_pow
+  - _ZGVcN8v_expf
+  - _ZGVcN8v_logf
+  - _ZGVcN8vv_powf
+  - _ZGVdN4v_exp
+  - _ZGVdN4v_log
+  - _ZGVdN4vv_pow
+  - _ZGVdN8v_expf
+  - _ZGVdN8v_logf
+  - _ZGVdN8vv_powf
 wrappedlibncurses:
 - pFv:
   - initscr

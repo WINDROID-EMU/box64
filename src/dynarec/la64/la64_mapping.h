@@ -106,7 +106,7 @@ r31     s8     xEmu         Saved register                  The Emu struct      
 #define fcc4 4
 #define fcc5 5
 #define fcc6 6
-#define fcc7 7
+#define fcc7 7 // reserved for comis fusion
 
 #define cAF  0x0
 #define cUN  0x8
@@ -175,5 +175,7 @@ r31     s8     xEmu         Saved register                  The Emu struct      
 #endif // LA64_ABI_1
 
 #endif // ASM_MAPPING
+
+#define EMU_MXCSR 800
 
 #endif //__LA64_MAPPING_H__

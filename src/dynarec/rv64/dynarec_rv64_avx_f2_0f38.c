@@ -4,7 +4,6 @@
 #include <errno.h>
 
 #include "debug.h"
-#include "env.h"
 #include "box64context.h"
 #include "box64cpu.h"
 #include "emu/x64emu_private.h"
@@ -15,12 +14,12 @@
 #include "x64trace.h"
 #include "dynarec_native.h"
 
-#include "la64_printer.h"
-#include "dynarec_la64_private.h"
-#include "dynarec_la64_functions.h"
+#include "rv64_printer.h"
+#include "dynarec_rv64_private.h"
+#include "dynarec_rv64_functions.h"
 #include "../dynarec_helper.h"
 
-uintptr_t dynarec64_AVX_F2_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ninst, vex_t vex, int* ok, int* need_epilog)
+uintptr_t dynarec64_AVX_F2_0F38(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ninst, vex_t vex, int* ok, int* need_epilog)
 {
     (void)ip;
     (void)need_epilog;
@@ -60,8 +59,8 @@ uintptr_t dynarec64_AVX_F2_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
         case 0xF5:
             INST_NAME("PDEP Gd, Vd, Ed");
             nextop = F8;
-            GETGDd;
-            GETVDs;
+            GETGD;
+            GETVD;
             GETED(0);
             if (gd == ed || gd == vd) {
                 gb1 = gd;
@@ -69,52 +68,58 @@ uintptr_t dynarec64_AVX_F2_0F38(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t i
             } else {
                 gb1 = 0;
             }
-            MOV64x(gd, 0);
-            MOV64x(x3, 1);
-            MOV64x(x4, 1);
+            ADDI(gd, xZR, 0);
+            ADDI(x3, xZR, 1);
+            ADDI(x4, xZR, 1);
             MARK;
             AND(x5, ed, x4);
             BEQZ_MARK2(x5);
             AND(x5, vd, x3);
-            BEQZ_MARK3(x5);
-            OR(gd, gd, x4);
+            if (cpuext.zicond) {
+                CZERO_EQZ(x5, x4, x5);
+                OR(gd, gd, x5);
+            } else {
+                BEQZ_MARK3(x5);
+                OR(gd, gd, x4);
+            }
             MARK3;
             SLLIxw(x3, x3, 1);
             MARK2;
             SLLIxw(x4, x4, 1);
             BNEZ_MARK(x4);
             if (gb1)
-                OR(gb1, gd, gd);
+                MV(gb1, gd);
             break;
         case 0xF6:
             INST_NAME("MULX Gd, Vd, Ed (,RDX)");
             nextop = F8;
-            GETGDd;
+            GETGD;
             GETED(0);
-            GETVDsd;
-            MARKREGs(xRDX);
+            GETVD;
             if (rex.w) {
                 if ((gd == xRDX) || (gd == ed) || (gd == vd))
                     gb1 = x3;
                 else
                     gb1 = gd;
-                MULH_DU(gb1, xRDX, ed);
-                if (gd != vd) { MUL_D(vd, xRDX, ed); }
+                MULHU(gb1, xRDX, ed);
+                if (gd != vd) { MUL(vd, xRDX, ed); }
                 if (gb1 == x3) {
                     MV(gd, gb1);
                 }
             } else {
-                MULW_D_WU(x3, xRDX, ed);
-                if (gd != vd) { ZEROUP2(vd, x3); }
-                SRLI_D(gd, x3, 32);
+                ZEXTW2(x4, xRDX);
+                ZEXTW2(x5, ed);
+                MUL(x3, x4, x5);
+                if (gd != vd) { ZEXTW2(vd, x3); }
+                SRLI(gd, x3, 32);
             }
             break;
         case 0xF7:
             INST_NAME("SHRX Gd, Ed, Vd");
             nextop = F8;
-            GETGDd;
+            GETGD;
             GETED(0);
-            GETVDs;
+            GETVD;
             ANDI(x5, vd, rex.w ? 0x3f : 0x1f);
             SRLxw(gd, ed, x5);
             break;
