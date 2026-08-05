@@ -530,6 +530,10 @@ void LoadLDPath(box64context_t *context)
             AddPath("/data/data/com.termux/files/usr/glibc/lib/box64-x86_64-linux-gnu", &context->box64_ld_lib, 1);
         if(FileExist("/data/data/com.termux/files/usr/lib/box64-x86_64-linux-gnu", 0))
             AddPath("/data/data/com.termux/files/usr/lib/box64-x86_64-linux-gnu", &context->box64_ld_lib, 1);
+        if(FileExist("/data/data/com.windroid.emu/files/usr/lib", 0))
+            AddPath("/data/data/com.windroid.emu/files/usr/lib", &context->box64_ld_lib, 1);
+        if(FileExist("/data/data/com.windroid.emu/files/usr/lib/x86_64-linux-gnu", 0))
+            AddPath("/data/data/com.windroid.emu/files/usr/lib/x86_64-linux-gnu", &context->box64_ld_lib, 1);
     }
     #else
     //TODO: Add Termux Library Path - Lily
@@ -537,10 +541,16 @@ void LoadLDPath(box64context_t *context)
         #ifdef BOX32
         if(FileExist("/data/data/com.termux/files/usr/lib/i386-linux-gnu", 0))
             AddPath("/data/data/com.termux/files/usr/lib/i386-linux-gnu", &context->box64_ld_lib, 1);
+        if(FileExist("/data/data/com.windroid.emu/files/usr/lib/i386-linux-gnu", 0))
+            AddPath("/data/data/com.windroid.emu/files/usr/lib/i386-linux-gnu", &context->box64_ld_lib, 1);
         #endif
     } else {
         if(FileExist("/data/data/com.termux/files/usr/lib/x86_64-linux-gnu", 0))
             AddPath("/data/data/com.termux/files/usr/lib/x86_64-linux-gnu", &context->box64_ld_lib, 1);
+        if(FileExist("/data/data/com.windroid.emu/files/usr/lib", 0))
+            AddPath("/data/data/com.windroid.emu/files/usr/lib", &context->box64_ld_lib, 1);
+        if(FileExist("/data/data/com.windroid.emu/files/usr/lib/x86_64-linux-gnu", 0))
+            AddPath("/data/data/com.windroid.emu/files/usr/lib/x86_64-linux-gnu", &context->box64_ld_lib, 1);
     }
     #endif
     if(getenv("LD_LIBRARY_PATH"))
@@ -1038,6 +1048,11 @@ int initialize(int argc, const char **argv, char** env, x64emu_t** emulator, elf
                     }
                 }
             }
+        }
+    }
+    if(!box64_custom_gstreamer) {
+        if(FileExist("/data/data/com.windroid.emu/files/usr/lib/gstreamer-1.0", 0)) {
+            box64_custom_gstreamer = box_strdup("/data/data/com.windroid.emu/files/usr/lib/gstreamer-1.0");
         }
     }
 
