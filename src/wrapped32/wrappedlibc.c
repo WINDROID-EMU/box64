@@ -26,6 +26,7 @@
 #include <sys/utsname.h>
 #include <sys/mman.h>
 #include <sys/ipc.h>
+#include "android_compat.h"
 #include <sys/sem.h>
 #include <setjmp.h>
 #include <sys/vfs.h>
@@ -1602,10 +1603,35 @@ static int isProcSelf(const char *path, const char* w)
 
 #ifdef ANDROID
 static int shm_open(const char *name, int oflag, mode_t mode) {
-    return -1;
+    if (!name || name[0] != '/') {
+        errno = EINVAL;
+        return -1;
+    }
+    
+    // Use Android-specific tmp directory
+    char path[512];
+    snprintf(path, sizeof(path), "%s%s", ANDROID_TMP_DIR, name);
+    
+    // Create directory if it doesn't exist
+    struct stat st;
+    if (stat(ANDROID_TMP_DIR, &st) != 0) {
+        mkdir(ANDROID_TMP_DIR, 0755);
+    }
+    
+    int fd = open(path, oflag, mode);
+    return fd;
 }
+
 static int shm_unlink(const char *name) {
-    return -1;
+    if (!name || name[0] != '/') {
+        errno = EINVAL;
+        return -1;
+    }
+    
+    char path[512];
+    snprintf(path, sizeof(path), "%s%s", ANDROID_TMP_DIR, name);
+    
+    return unlink(path);
 }
 #endif
 
@@ -3528,13 +3554,43 @@ EXPORT int my32_sched_setaffinity(x64emu_t* emu, pid_t pid, size_t sz, cpu_set_t
 }
 
 
-#if 0
 #ifndef __NR_memfd_create
 #define MFD_CLOEXEC		    0x0001U
 #define MFD_ALLOW_SEALING	0x0002U
 EXPORT int my32_memfd_create(x64emu_t* emu, void* name, uint32_t flags)
 {
-    // try to simulate that function
+    // Try native syscall first (kernel 3.17+)
+    #ifdef SYS_memfd_create
+    int ret = syscall(SYS_memfd_create, name, flags);
+    if (ret >= 0) return ret;
+    // If syscall exists but failed, fall through to fallback
+    if (errno != ENOSYS) return -1;
+    #endif
+    
+    // Fallback for Android with specific paths
+    #ifdef ANDROID
+    char android_path[512];
+    snprintf(android_path, sizeof(android_path), 
+             "%s/memfd_%s", ANDROID_TMP_DIR, (char*)name);
+    
+    // Ensure tmp directory exists
+    struct stat st;
+    if (stat(ANDROID_TMP_DIR, &st) != 0) {
+        mkdir(ANDROID_TMP_DIR, 0755);
+    }
+    
+    uint32_t fl = O_RDWR | O_CREAT | O_EXCL;
+    if(flags & MFD_CLOEXEC) fl |= O_CLOEXEC;
+    
+    int fd = open(android_path, fl, S_IRWXU);
+    if (fd >= 0) {
+        // Unlink immediately to make it anonymous like memfd
+        unlink(android_path);
+        return fd;
+    }
+    #endif
+    
+    // Generic fallback using shm_open
     uint32_t fl = O_RDWR | O_CREAT;
     if(flags&MFD_CLOEXEC)
         fl |= O_CLOEXEC;
@@ -3547,7 +3603,54 @@ EXPORT int my32_memfd_create(x64emu_t* emu, void* name, uint32_t flags)
 
 #ifndef GRND_RANDOM
 #define GRND_RANDOM	0x0002
+#define GRND_NONBLOCK 0x0001
 #endif
+
+EXPORT int32_t my32_getrandom(x64emu_t* emu, void* buf, uint32_t buflen, uint32_t flags)
+{
+    // Try native syscall first (kernel 3.17+)
+    #ifdef SYS_getrandom
+    ssize_t ret = syscall(SYS_getrandom, buf, buflen, flags);
+    if (ret >= 0 || errno != ENOSYS) return ret;
+    #endif
+    
+    // Fallback to /dev/urandom for older kernels or Android
+    int fd = open("/dev/urandom", O_RDONLY);
+    if (fd < 0) {
+        // Try /dev/random as last resort
+        fd = open("/dev/random", O_RDONLY);
+        if (fd < 0) {
+            errno = ENOSYS;
+            return -1;
+        }
+    }
+    
+    ssize_t ret = read(fd, buf, buflen);
+    close(fd);
+    
+    if (ret < 0) return -1;
+    if (ret != buflen) {
+        // Partial read is acceptable for getrandom
+        if (flags & GRND_NONBLOCK) {
+            return ret;
+        }
+        // For blocking mode, try to get all bytes
+        fd = open("/dev/urandom", O_RDONLY);
+        if (fd >= 0) {
+            ssize_t total = ret;
+            while (total < buflen) {
+                ret = read(fd, (char*)buf + total, buflen - total);
+                if (ret <= 0) break;
+                total += ret;
+            }
+            close(fd);
+            return total;
+        }
+    }
+    
+    return ret;
+}
+
 EXPORT int my32_getentropy(x64emu_t* emu, void* buffer, size_t length)
 {
     library_t* lib = my_lib;

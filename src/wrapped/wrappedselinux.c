@@ -15,6 +15,7 @@
 #include "librarian/library_private.h"
 #include "x64emu.h"
 #include "callback.h"
+#include "android_compat.h"
 
 const char* selinuxName = "libselinux.so.1";
 #define LIBNAME selinux
@@ -264,5 +265,67 @@ EXPORT void* my_selinux_get_callback(x64emu_t* emu, int type)
         default: return fct;
     }
 }
+
+#ifdef ANDROID
+// Android-specific SELinux context handling
+EXPORT int my_selinux_context_to_sid(x64emu_t* emu, const char* context)
+{
+    (void)emu;
+    // On Android, many SELinux contexts are restricted
+    // Return a dummy SID for compatibility
+    if (!context) return -1;
+    
+    // Common Android contexts that should work
+    static const char* allowed_contexts[] = {
+        "u:r:untrusted_app:s0",
+        "u:r:priv_app:s0",
+        "u:r:system_app:s0",
+        "u:object_r:app_data_file:s0",
+        "u:object_r:tmpfs:s0",
+        NULL
+    };
+    
+    for (int i = 0; allowed_contexts[i]; i++) {
+        if (strcmp(context, allowed_contexts[i]) == 0) {
+            // Return a valid-looking SID
+            return 1000 + i;
+        }
+    }
+    
+    // For unknown contexts, return a generic SID
+    return 2000;
+}
+
+EXPORT char* my_selinux_sid_to_context(x64emu_t* emu, int sid)
+{
+    (void)emu;
+    // Map SIDs back to contexts
+    if (sid >= 1000 && sid < 1005) {
+        static const char* contexts[] = {
+            "u:r:untrusted_app:s0",
+            "u:r:priv_app:s0",
+            "u:r:system_app:s0",
+            "u:object_r:app_data_file:s0",
+            "u:object_r:tmpfs:s0"
+        };
+        return (char*)contexts[sid - 1000];
+    }
+    
+    // Default context for unknown SIDs
+    return (char*)"u:r:untrusted_app:s0";
+}
+
+EXPORT int my_selinux_getenforce(x64emu_t* emu)
+{
+    (void)emu;
+    // On Android, SELinux is usually enforcing
+    // Return permissive mode for compatibility with legacy apps
+    #ifdef IS_ANDROID_12_OR_LATER
+    return 0; // Permissive mode for better compatibility
+    #else
+    return 1; // Enforcing mode on older Android
+    #endif
+}
+#endif
 
 #include "wrappedlib_init.h"
