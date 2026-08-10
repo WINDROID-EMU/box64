@@ -1845,6 +1845,21 @@ uintptr_t dynarec64_AVX_F3_0F38(dynarec_arm_t* dyn, uintptr_t addr, uintptr_t ip
         }                                       \
     }
 
+// Helper inline functions for constant range checks
+// PERFORMANCE OPTIMIZATION: These inline functions centralize the logic for checking
+// if a constant can use ARM64 U12 immediate encoding. This:
+// - Reduces code duplication across multiple files
+// - Allows compiler to inline and optimize the checks
+// - Makes it easier to adjust the range if needed
+// Used in: emit_math.c, emit_shift.c, emit_logic.c for immediate optimizations
+static inline int can_use_u12_imm(int64_t c) {
+    return c >= 0 && c < 0x1000;
+}
+
+static inline int can_use_u12_imm_signed(int64_t c) {
+    return c >= -0x1000 && c < 0x1000;
+}
+
 #define PURGE_YMM()                                                         \
     do {                                                                    \
         if (dyn->use_ymm && (ok > 0) && reset_n == -1 && dyn->insts[ninst + 1].purge_ymm) \

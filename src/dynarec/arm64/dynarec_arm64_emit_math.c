@@ -50,8 +50,7 @@ void emit_add32(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int s2, int s3
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s4, cEQ);
-            BFIw(xFlags, s4, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_CF) {
@@ -83,7 +82,7 @@ void emit_add32c(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int64_t c, in
     MAYUSE(s5);
     if((s1==xRSP) && (BOX64DRENV(dynarec_safeflags)<2) && (!dyn->insts || (dyn->insts[ninst].x64.gen_flags==X_PEND) || (!BOX64ENV(dynarec_df) && (dyn->insts[ninst].x64.gen_flags==X_ALL)))) {
         // special case when doing math on ESP and only PEND is needed: ignoring it!
-        if(c>=0 && c<0x1000) {
+        if(can_use_u12_imm(c)) {
             ADDx_U12(s1, s1, c);
         } else {
             MOV64x(s3, c);
@@ -104,7 +103,7 @@ void emit_add32c(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int64_t c, in
         ORRxw_REG(s3, s1, s5);      // s3 = op1 | op2
         ANDxw_REG(s4, s1, s5);      // s4 = op1 & op2
     }
-    if(c>=0 && c<0x1000) {
+    if(can_use_u12_imm(c)) {
         IFX(X_ALL) {
             ADDSxw_U12(s1, s1, c);
         } else {
@@ -129,8 +128,7 @@ void emit_add32c(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int64_t c, in
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s4, cEQ);
-            BFIw(xFlags, s4, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_CF) {
@@ -187,8 +185,7 @@ void emit_sub32(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int s2, int s3
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s4, cEQ);
-            BFIw(xFlags, s4, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_CF) {
@@ -223,7 +220,7 @@ void emit_sub32c(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int64_t c, in
     MAYUSE(s5);
     if(s1==xRSP && (BOX64DRENV(dynarec_safeflags)<2) && (!dyn->insts || (dyn->insts[ninst].x64.gen_flags==X_PEND) || (!BOX64ENV(dynarec_df) && (dyn->insts[ninst].x64.gen_flags==X_ALL)))) {
         // special case when doing math on RSP and only PEND is needed: ignoring it!
-        if(c>=0 && c<0x1000) {
+        if(can_use_u12_imm(c)) {
             SUBxw_U12(s1, s1, c);
         } else {
             MOV64xw(s5, c);
@@ -244,7 +241,7 @@ void emit_sub32c(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int64_t c, in
         ORNxw_REG(s3, s5, s1);      // s3 = ~op1 | op2
         BICxw_REG(s4, s5, s1);      // s4 = ~op1 & op2
     }
-    if(c>=0 && c<0x1000) {
+    if(can_use_u12_imm(c)) {
         IFX(X_ALL) {
             SUBSxw_U12(s1, s1, c);
         } else {
@@ -269,8 +266,7 @@ void emit_sub32c(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int64_t c, in
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s4, cEQ);
-            BFIw(xFlags, s4, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_CF) {
@@ -769,8 +765,7 @@ void emit_inc32(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int s3, int s4
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s4, cEQ);
-            BFIw(xFlags, s4, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_OF) {
@@ -873,8 +868,7 @@ void emit_dec32(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int s3, int s4
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s4, cEQ);
-            BFIw(xFlags, s4, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_OF) {
@@ -1673,8 +1667,7 @@ void emit_neg32(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int s3, int s4
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s4, cEQ);
-            BFIw(xFlags, s4, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_OF) {
@@ -1732,8 +1725,7 @@ void emit_neg16(dynarec_arm_t* dyn, int ninst, int s1, int s3, int s4)
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s4, cEQ);
-            BFIw(xFlags, s4, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_SF) {
@@ -1786,8 +1778,7 @@ void emit_neg8(dynarec_arm_t* dyn, int ninst, int s1, int s3, int s4)
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s4, cEQ);
-            BFIw(xFlags, s4, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_SF) {
