@@ -53,8 +53,7 @@ void emit_or32(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int s2, int s3,
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s3, cEQ);
-            BFIw(xFlags, s3, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s3, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_SF) {
@@ -107,8 +106,7 @@ void emit_or32c(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int64_t c, int
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s3, cEQ);
-            BFIw(xFlags, s3, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s3, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_SF) {
@@ -156,8 +154,7 @@ void emit_xor32(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int s2, int s3
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s3, cEQ);
-            BFIw(xFlags, s3, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s3, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_SF) {
@@ -214,8 +211,7 @@ void emit_xor32c(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int64_t c, in
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s3, cEQ);
-            BFIw(xFlags, s3, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s3, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_SF) {
@@ -261,8 +257,7 @@ void emit_and32(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int s2, int s3
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s3, cEQ);
-            BFIw(xFlags, s3, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s3, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_SF) {
@@ -313,8 +308,7 @@ void emit_and32c(dynarec_arm_t* dyn, int ninst, rex_t rex, int s1, int64_t c, in
     }
     IFX(X_ZF) {
         IFNATIVE(NF_EQ) {} else {
-            CSETw(s3, cEQ);
-            BFIw(xFlags, s3, F_ZF, 1);
+            EXTRACT_FLAG_TO_BIT(s3, xFlags, F_ZF, cEQ);
         }
     }
     IFX(X_SF) {

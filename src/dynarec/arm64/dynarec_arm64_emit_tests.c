@@ -149,8 +149,7 @@ void emit_cmp16(dynarec_arm_t* dyn, int ninst, int s1, int s2, int s3, int s4, i
         }
         IFX(X_ZF) {
             IFNATIVE(NF_EQ) {} else {
-                CSETw(s4, cEQ);
-                BFIw(xFlags, s4, F_ZF, 1);
+                EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
             }
         }
         IFX(X_CF) {
@@ -242,8 +241,7 @@ void emit_cmp8(dynarec_arm_t* dyn, int ninst, int s1, int s2, int s3, int s4, in
         }
         IFX(X_ZF) {
             IFNATIVE(NF_EQ) {} else {
-                CSETw(s4, cEQ);
-                BFIw(xFlags, s4, F_ZF, 1);
+                EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
             }
         }
         IFX(X_CF) {
@@ -415,8 +413,7 @@ void emit_test16(dynarec_arm_t* dyn, int ninst, int s1, int s2, int s3, int s4, 
         ANDSw_REG_LSL(s5, s5, s2, 16);
         IFX(X_ZF) {
             IFNATIVE(NF_EQ) {} else {
-                CSETw(s4, cEQ);
-                BFIw(xFlags, s4, F_ZF, 1);
+                EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
             }
         }
         IFX(X_CF) {
@@ -469,8 +466,7 @@ void emit_test16c(dynarec_arm_t* dyn, int ninst, int s1, uint32_t c, int s3, int
         }
         IFX(X_ZF) {
             IFNATIVE(NF_EQ) {} else {
-                CSETw(s4, cEQ);
-                BFIw(xFlags, s4, F_ZF, 1);
+                EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
             }
         }
         IFX(X_CF) {
@@ -522,8 +518,7 @@ void emit_test8(dynarec_arm_t* dyn, int ninst, int s1, int s2, int s3, int s4, i
         ANDSw_REG_LSL(s5, s5, s2, 24);
         IFX(X_ZF) {
             IFNATIVE(NF_EQ) {} else {
-                CSETw(s4, cEQ);
-                BFIw(xFlags, s4, F_ZF, 1);
+                EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
             }
         }
         IFX(X_CF) {
@@ -576,8 +571,7 @@ void emit_test8c(dynarec_arm_t* dyn, int ninst, int s1, uint32_t c, int s3, int 
         }
         IFX(X_ZF) {
             IFNATIVE(NF_EQ) {} else {
-                CSETw(s4, cEQ);
-                BFIw(xFlags, s4, F_ZF, 1);
+                EXTRACT_FLAG_TO_BIT(s4, xFlags, F_ZF, cEQ);
             }
         }
         IFX(X_CF) {

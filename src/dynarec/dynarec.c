@@ -29,6 +29,13 @@
 
 extern int running32bits;
 #ifdef DYNAREC
+// PERFORMANCE: Thread-local cache for last accessed block to avoid repeated lookups
+static __thread struct {
+    uintptr_t last_addr;
+    dynablock_t* last_block;
+    int last_is32bits;
+} link_cache = {0, NULL, 0};
+
 void* LinkNext(x64emu_t* emu, uintptr_t addr, void* x2, uintptr_t* x3)
 {
     int is32bits = (R_CS == 0x23);
@@ -60,7 +67,18 @@ void* LinkNext(x64emu_t* emu, uintptr_t addr, void* x2, uintptr_t* x3)
     #endif
     void * jblock;
     dynablock_t* block = NULL;
-    block = DBGetBlock(emu, addr, 1, is32bits);
+    
+    // PERFORMANCE: Check cache first for common case (loops, branches)
+    if(link_cache.last_addr == addr && link_cache.last_is32bits == is32bits) {
+        block = link_cache.last_block;
+    } else {
+        block = DBGetBlock(emu, addr, 1, is32bits);
+        if(block) {
+            link_cache.last_addr = addr;
+            link_cache.last_block = block;
+            link_cache.last_is32bits = is32bits;
+        }
+    }
     if(!block) {
         #ifdef HAVE_TRACE
         if(LOG_INFO<=BOX64ENV(dynarec_log)) {
