@@ -70,6 +70,8 @@ pthread_mutex_t     mutex_blocks;
 #endif
 //#define TRACE_MEMSTAT
 rbtree_t* memprot = NULL;
+// fake guest 4k page permissions for non4k systems, used by getrlimit for example.
+static rbtree_t* memprot_guest = NULL;
 int have48bits = 0;
 static int inited = 0;
 typedef enum {
@@ -716,6 +718,7 @@ void* map128_customMalloc(size_t size, int is32bits)
                 }
             }
             p_blocks[i].size = allocsize;
+            mutex_lock(&mutex_blocks);
         }
         #ifdef TRACE_MEMSTAT
         printf_log(LOG_INFO, "Custommem: Failed to alloc 32bits: allocation %p-%p for 128byte MAP Alloc p_blocks[%d]\n", p, p+allocsize, i);
@@ -723,6 +726,7 @@ void* map128_customMalloc(size_t size, int is32bits)
         p_blocks[i].maxfree = allocsize - mapsize;
         p_blocks[i].is32bits = 0;
         errno = ENOMEM;
+        mutex_unlock(&mutex_blocks);
         return NULL;
     }
     #ifdef TRACE_MEMSTAT
@@ -810,7 +814,7 @@ void* map64_customMalloc(size_t size, int is32bits)
         __sync_synchronize();
     }
 
-    size_t allocsize = MMAPSIZE64; 
+    size_t allocsize = MMAPSIZE64;
     p_blocks[i].block = NULL;    // guard re-entrance
     p_blocks[i].first = NULL;
     p_blocks[i].size  = 0;
@@ -825,7 +829,7 @@ void* map64_customMalloc(size_t size, int is32bits)
     customMalloc_allocated += allocsize;
     #endif
 
-    size_t mapsize = (allocsize / 64) / 8; 
+    size_t mapsize = (allocsize / 64) / 8;
     mapsize = (mapsize + 255) & ~255LL;
 
     p_blocks[i].type  = BTYPE_MAP64;
@@ -844,6 +848,7 @@ void* map64_customMalloc(size_t size, int is32bits)
         p_blocks[i].maxfree = allocsize - mapsize;
         p_blocks[i].is32bits = 0;
         errno = ENOMEM;
+        mutex_unlock(&mutex_blocks);
         return NULL;
     }
 
@@ -988,6 +993,7 @@ void* internal_customMalloc(size_t size, int is32bits)
                 }
             }
             p_blocks[i].size = allocsize;
+            mutex_lock(&mutex_blocks);
         }
         #ifdef TRACE_MEMSTAT
         printf_log(LOG_INFO, "Custommem: Failed to alloc 32bits: allocation %p-%p for LIST Alloc p_blocks[%d]\n", p, p+allocsize, i);
@@ -995,6 +1001,7 @@ void* internal_customMalloc(size_t size, int is32bits)
         p_blocks[i].maxfree = allocsize - sizeof(blockmark_t)*2;
         p_blocks[i].is32bits = 0;
         errno = ENOMEM;
+        mutex_unlock(&mutex_blocks);
         return NULL;
     }
     #ifdef TRACE_MEMSTAT
@@ -1280,6 +1287,7 @@ void* internal_customMemAligned(size_t align, size_t size, int is32bits)
                 }
             }
             p_blocks[i].size = allocsize;
+            mutex_lock(&mutex_blocks);
         }
         #ifdef TRACE_MEMSTAT
         printf_log(LOG_INFO, "Custommem: Failed to aligned alloc 32bits: allocation %p-%p for LIST Alloc p_blocks[%d]\n", p, p+allocsize, i);
@@ -1287,6 +1295,7 @@ void* internal_customMemAligned(size_t align, size_t size, int is32bits)
         p_blocks[i].is32bits = 0;
         p_blocks[i].maxfree = allocsize - sizeof(blockmark_t)*2;
         errno = ENOMEM;
+        mutex_unlock(&mutex_blocks);
         return NULL;
     }
     #ifdef TRACE_MEMSTAT
@@ -1644,7 +1653,7 @@ dynablock_t* FindDynablockFromNativeAddress(void* p)
 {
     if(!p)
         return NULL;
-    
+
     uintptr_t addr = (uintptr_t)p;
 
     blocklist_t* bl = (blocklist_t*)rb_get_64(rbt_dynmem, addr);
@@ -1711,7 +1720,7 @@ int PurgeDynarecMap(mmaplist_t* list, size_t size)
                     int in_used = native_lock_get_d(&dynablock->in_used);
                     if(!in_used) {
                         // free the block, but unreference it first
-                        //if(setJumpTableDefaultIfRef64(dynablock->x64_addr, dynablock->block)) 
+                        //if(setJumpTableDefaultIfRef64(dynablock->x64_addr, dynablock->block))
                         {
                             dynarec_log(LOG_INFO/*LOG_DEBUG*/, " PurgeDynablock %p\n", dynablock);
                             if((n<end) && !n->next.fill )
@@ -1788,7 +1797,7 @@ uintptr_t AllocDynarecMap(uintptr_t x64_addr, size_t size, int is_new)
     if(box64_is32bits)
         p = box32_dynarec_mmap(allocsize, -1, 0);
     #endif
-    // disabling for now. explicit hugepage needs to be enabled to be used on userspace 
+    // disabling for now. explicit hugepage needs to be enabled to be used on userspace
     // with`/sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages` as the number of allowaed 2M huge page
     // At least with a 2M allocation, transparent huge page should kick-in
     #if 0//def MAP_HUGETLB
@@ -1843,7 +1852,7 @@ void FreeDynarecMap(uintptr_t addr)
 {
     if(!addr)
         return;
-    
+
 
     blocklist_t* bl = (blocklist_t*)rb_get_64(rbt_dynmem, addr);
 
@@ -1930,7 +1939,7 @@ int cleanDBFromAddressRange(uintptr_t addr, size_t size, int destroy)
                 case 1: FreeRangeDynablock(db, addr, size); break;
                 case 2: MarkCRCRangeDynablock(db, addr, size); break;
             }
-                
+
         }
     }
     return ret;
@@ -2300,7 +2309,7 @@ void protectDBJumpTable(uintptr_t addr, size_t size, void* jump, void* ref)
                     }
                 }
                 prot |= PROT_DYNAREC;
-            } else 
+            } else
                 prot |= PROT_DYNAREC_R;
         }
         if (prot != oprot) // If the node doesn't exist, then prot != 0
@@ -2353,7 +2362,7 @@ void protectDB(uintptr_t addr, uintptr_t size)
                     }
                 }
                 prot |= PROT_DYNAREC;
-            } else 
+            } else
                 prot |= PROT_DYNAREC_R;
         }
         if (prot != oprot) // If the node doesn't exist, then prot != 0
@@ -2717,7 +2726,7 @@ void allocProtection(uintptr_t addr, size_t size, uint32_t prot)
     addr &= ~(box64_pagesize-1);
     LOCK_PROT();
     uint32_t val;
-    uintptr_t endb; 
+    uintptr_t endb;
     int there = rb_get_end(mapallmem, addr, &val, &endb);
     // block is here or absent, no half-block handled..
     if(!there) {
@@ -2749,7 +2758,7 @@ void loadProtectionFromMap()
         uintptr_t prev = 0;
         if(sscanf(buf, "%lx-%lx %c%c%c", &s, &e, &r, &w, &x)==5) {
             uint32_t val;
-            uintptr_t endb; 
+            uintptr_t endb;
             if(prev!=s && rb_get_end(mapallmem, prev, &val, &endb)) {
                 if(endb>s) endb = s;
                 if(val==MEM_EXTERNAL) {
@@ -2802,6 +2811,52 @@ void freeProtection(uintptr_t addr, size_t size)
     rb_unset(mapallmem, addr, addr+size);
     rb_unset(memprot, addr, addr+size);
     UNLOCK_PROT();
+}
+
+void setGuestFakeProtection(uintptr_t addr, size_t size, uint32_t prot)
+{
+    if(box64_pagesize <= X86_PAGE_SIZE || !memprot_guest || !size) return;
+    uintptr_t end = addr + size;
+    addr &= ~(X86_PAGE_SIZE - 1);
+    end = (end + X86_PAGE_SIZE - 1) & ~(X86_PAGE_SIZE - 1);
+    if(end <= addr) return;
+    LOCK_PROT();
+    rb_set(memprot_guest, addr, end, prot & ~PROT_CUSTOM);
+    UNLOCK_PROT();
+}
+
+void freeGuestFakeProtection(uintptr_t addr, size_t size)
+{
+    if(box64_pagesize <= X86_PAGE_SIZE || !memprot_guest || !size)return;
+    uintptr_t end = addr + size;
+    addr &= ~(X86_PAGE_SIZE - 1);
+    end = (end + X86_PAGE_SIZE - 1) & ~(X86_PAGE_SIZE - 1);
+    if(end <= addr) return;
+    LOCK_PROT();
+    rb_unset(memprot_guest, addr, end);
+    UNLOCK_PROT();
+}
+
+int isGuestRangeFakelyProtected(uintptr_t addr, size_t size, uint32_t prot)
+{
+    if(box64_pagesize <= X86_PAGE_SIZE || !memprot_guest || !size) return 1;
+    uintptr_t end = addr + size;
+    if(end < addr) return 0;
+    int ret = 1;
+    LOCK_PROT_READ();
+    while(addr < end) {
+        uint32_t guest_prot;
+        uintptr_t bend;
+        if(rb_get_end(memprot_guest, addr, &guest_prot, &bend) && (guest_prot & prot) != prot) {
+            ret = 0;
+            break;
+        }
+        if(bend > end) bend = end;
+        if(bend <= addr) break;
+        addr = bend;
+    }
+    UNLOCK_PROT_READ();
+    return ret;
 }
 
 uint32_t getProtection(uintptr_t addr)
@@ -3025,7 +3080,7 @@ void reverveHigMem32(void)
             if(cur!=MAP_FAILED) {
                 //printf_log(LOG_INFO, " Failed to reserve high %p (%zx)\n", cur, cur_size);
                 InternalMunmap(cur, cur_size);
-            } //else 
+            } //else
                 //printf_log(LOG_INFO, " Failed to reserve %zx sized block\n", cur_size);
             cur_size>>=1;
         } else {
@@ -3107,6 +3162,7 @@ void init_custommem_helper(box64context_t* ctx)
         for(int i=0; i<n_blocks; ++i)
             rb_set(blockstree, (uintptr_t)p_blocks[i].block, (uintptr_t)p_blocks[i].block+p_blocks[i].size, i);
     memprot = rbtree_init("memprot");
+    memprot_guest = rbtree_init("memprot_guest");
 #ifdef DYNAREC
     #ifdef JMPTABL_SHIFT4
     for(int i=0; i<(1<<JMPTABL_SHIFT3); ++i) {
@@ -3141,7 +3197,7 @@ void fini_custommem_helper(box64context_t *ctx)
     uintptr_t njmps = 0, njmps_in_lv1_max = 0;
     #ifdef JMPTABL_SHIFT4
     uintptr_t*** box64_jmptbl2;
-    for(uintptr_t idx3 = 0; idx3 < (1<< JMPTABL_SHIFT3); ++idx3) {    
+    for(uintptr_t idx3 = 0; idx3 < (1<< JMPTABL_SHIFT3); ++idx3) {
         if (box64_jmptbl3[idx3] == box64_jmptbldefault2) continue;
         box64_jmptbl3 = box64_jmptbl3[idx3];
     #endif
@@ -3211,6 +3267,8 @@ void fini_custommem_helper(box64context_t *ctx)
 #endif
     rbtree_delete(memprot);
     memprot = NULL;
+    rbtree_delete(memprot_guest);
+    memprot_guest = NULL;
     rbtree_delete(mapallmem);
     mapallmem = NULL;
     rbtree_delete(blockstree);

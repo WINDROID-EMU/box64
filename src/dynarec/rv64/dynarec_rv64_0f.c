@@ -95,7 +95,7 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                             CSRRS(x3, xZR, 0xC01); // RDTIME
                         }
                         if (box64_rdtsc_shift) {
-                            SRLI(x3, x3, box64_rdtsc_shift);
+                            SLLI(x3, x3, box64_rdtsc_shift);
                         }
                         SRLI(xRDX, x3, 32);
                         ZEXTW2(xRAX, x3); // wipe upper part
@@ -386,6 +386,7 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
             LD(x4, gback, gdoffset + 8);
             SD(x3, wback, fixedaddress + 0);
             SD(x4, wback, fixedaddress + 8);
+            if (!MODREG) SMWRITE2();
             break;
         case 0x2C:
             INST_NAME("CVTTPS2PI Gm,Ex");
@@ -481,7 +482,7 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 CSRRS(x3, xZR, 0xC01); // RDTIME
             }
             if (box64_rdtsc_shift) {
-                SRLI(x3, x3, box64_rdtsc_shift);
+                SLLI(x3, x3, box64_rdtsc_shift);
             }
             SRLI(xRDX, x3, 32);
             ZEXTW2(xRAX, x3); // wipe upper part
@@ -894,10 +895,10 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                     INST_NAME("MOVBE Ed, Gd");
                     nextop = F8;
                     GETGD;
-                    SMREAD();
                     addr = geted(dyn, addr, ninst, nextop, &wback, x2, x1, &fixedaddress, rex, NULL, 1, 0);
                     REV8xw(x3, gd, x3, x4, x5, x6);
                     SDxw(x3, wback, fixedaddress);
+                    SMWRITE2();
                     break;
                 default:
                     DEFAULT;
@@ -1052,9 +1053,9 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                     J(14 * 4); // continue
                     FLTS(x3, v0, s0); // s0 > 0.0f?
                     BNEZ(x3, 6 * 4);
-                    FEQS(x3, v0, s0); // s0 == 0.0f?
+                    FEQS(x3, v0, s0); // s0 == 0.0f? (also true for -0.0f)
                     BEQZ(x3, 4 * 4);
-                    FDIVS(s0, s1, v0); // generate an inf
+                    FDIVS(s0, s1, s0); // generate an inf with the correct sign
                     FSW(s0, gback, gdoffset + i * 4);
                     J(7 * 4); // continue
                 }
@@ -1251,11 +1252,13 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
             GETGX();
             GETEX(x2, 0, 12);
             s0 = fpu_get_scratch(dyn);
+            u8 = sse_setround(dyn, ninst, x6, x4);
             for (int i = 0; i < 4; ++i) {
                 LW(x3, wback, fixedaddress + i * 4);
-                FCVTSW(s0, x3, RD_RNE);
+                FCVTSW(s0, x3, RD_DYN);
                 FSW(s0, gback, gdoffset + i * 4);
             }
+            x87_restoreround(dyn, ninst, u8);
             break;
         case 0x5C:
             INST_NAME("SUBPS Gx, Ex");
@@ -1689,7 +1692,6 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                     }
                     break;
                 default:
-                    *ok = 0;
                     DEFAULT;
             }
             break;
@@ -1822,9 +1824,11 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
             INST_NAME("EMMS");
             // empty MMX, FPU now usable
             mmx_purgecache(dyn, ninst, 0, x1);
-            /*emu->top = 0;
-            emu->fpu_stack = 0;*/
-            // TODO: Check if something is needed here?
+            x87_purgecache(dyn, ninst, 0, x1, x2, x3);  // also purge x87 and hard reset it
+            SW(xZR, xEmu, offsetof(x64emu_t, top));
+            SW(xZR, xEmu, offsetof(x64emu_t, fpu_stack));
+            MOV32w(x1, TAGS_EMPTY);
+            SD(x1, xEmu, offsetof(x64emu_t, fpu_tags));
             break;
         case 0x7E:
             INST_NAME("MOVD Ed, Gm");
@@ -1858,6 +1862,7 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
             GETEM(x2, 0, 1);
             LD(x3, gback, gdoffset + 0);
             SD(x3, wback, fixedaddress);
+            if (!MODREG) SMWRITE2();
             break;
 #define GO(GETFLAGS, NO, YES, NATNO, NATYES, F)                                             \
     READFLAGS_FUSION(F, x1, x2, x3, x4, x5);                                                \
@@ -2205,20 +2210,28 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
             }
             break;
         case 0xAF:
-            // TODO: Refine this
             INST_NAME("IMUL Gd, Ed");
-            SETFLAGS(X_ALL, SF_PENDING, NAT_FLAGS_NOFUSION);
+            SETFLAGS(X_ALL, SF_SET_NODF, NAT_FLAGS_NOFUSION);
             nextop = F8;
             GETGD;
             GETED(0);
+            CLEAR_FLAGS();
             if (rex.w) {
                 // 64bits imul
                 UFLAG_IF {
                     MULH(x3, gd, ed);
                     MUL(gd, gd, ed);
-                    UFLAG_OP1(x3);
-                    UFLAG_RES(gd);
-                    UFLAG_DF(x3, d_imul64);
+                    SET_DFNONE();
+                    IFX (X_CF | X_OF) {
+                        SRAI(x5, gd, 63);
+                        XOR(x3, x3, x5);
+                        SNEZ(x3, x3);
+                        IFX (X_CF) OR(xFlags, xFlags, x3); // F_CF == 0
+                        IFX (X_OF) {
+                            SLLI(x3, x3, F_OF2);
+                            OR(xFlags, xFlags, x3);
+                        }
+                    }
                 } else {
                     MULxw(gd, gd, ed);
                 }
@@ -2227,16 +2240,30 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 UFLAG_IF {
                     SEXT_W(gd, gd);
                     SEXT_W(x3, ed);
-                    MUL(gd, gd, x3);
-                    UFLAG_RES(gd);
-                    SRLI(x3, gd, 32);
-                    UFLAG_OP1(x3);
-                    UFLAG_DF(x3, d_imul32);
+                    MUL(x5, gd, x3); // full 64bits product
+                    SET_DFNONE();
+                    IFX (X_CF | X_OF) {
+                        SEXT_W(x3, x5);
+                        XOR(x3, x5, x3);
+                        SNEZ(x3, x3);
+                        IFX (X_CF) OR(xFlags, xFlags, x3); // F_CF == 0
+                        IFX (X_OF) {
+                            SLLI(x3, x3, F_OF2);
+                            OR(xFlags, xFlags, x3);
+                        }
+                    }
+                    ZEXTW2(gd, x5);
                 } else {
                     MULxw(gd, gd, ed);
+                    ZEROUP(gd);
                 }
-                ZEROUP(gd);
             }
+            IFX (X_SF) {
+                SRLI(x5, gd, rex.w ? 63 : 31);
+                SLLI(x5, x5, F_SF);
+                OR(xFlags, xFlags, x5);
+            }
+            IFX (X_PF) emit_pf(dyn, ninst, gd, x3, x4);
             break;
         case 0xB3:
             INST_NAME("BTR Ed, Gd");
@@ -2646,6 +2673,7 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
             } else {
                 addr = geted(dyn, addr, ninst, nextop, &ed, x2, x1, &fixedaddress, rex, NULL, 1, 0);
                 SDxw(gd, ed, fixedaddress);
+                SMWRITE2();
             }
             break;
         case 0xC4:
@@ -2660,7 +2688,7 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
             INST_NAME("PEXTRW Gd,Em,Ib");
             nextop = F8;
             GETGD;
-            GETEM(x2, 0, 6);
+            GETEM(x2, 1, 6);
             u8 = (F8) & 3;
             LHU(gd, wback, fixedaddress + u8 * 2);
             break;
@@ -3071,6 +3099,7 @@ uintptr_t dynarec64_0F(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 v0 = mmx_get_reg(dyn, ninst, x1, x2, x3, gd);
                 addr = geted(dyn, addr, ninst, nextop, &ed, x2, x1, &fixedaddress, rex, NULL, 1, 0);
                 FSD(v0, ed, fixedaddress);
+                SMWRITE2();
             }
             break;
         case 0xE8:

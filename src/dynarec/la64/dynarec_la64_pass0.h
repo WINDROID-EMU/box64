@@ -10,7 +10,6 @@
 #define READFLAGS(A)                                                                        \
     do {                                                                                    \
         dyn->insts[ninst].x64.use_flags = A;                                                \
-        if (dyn->f != status_none_pending) dyn->f = status_none;                            \
         if (!BOX64ENV(dynarec_df) && (A) & X_PEND) dyn->insts[ninst].x64.use_flags = X_ALL; \
         dyn->f = status_none;                                                               \
     } while (0)
@@ -81,6 +80,7 @@
     dyn->insts[ninst].up32_write32 = 0;                                                                          \
     dyn->insts[ninst].up32_skip = 0;                                                                             \
     dyn->insts[ninst].up32_pending = 0;                                                                          \
+    dyn->insts[ninst].vector_liveness = (vector_liveness_t) { 0 };                                               \
     dyn->insts[ninst].comis_fusion = -1;                                                                         \
     dyn->insts[ninst].comis_mark = 0;                                                                            \
     dyn->insts[ninst].host_call = 0;                                                                             \

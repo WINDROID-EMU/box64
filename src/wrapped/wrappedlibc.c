@@ -96,6 +96,7 @@ extern int _nl_msg_cat_cntr __attribute__((weak));
 #include "cleanup.h"
 #include "random.h"
 #include "cpumask.h"
+#include "x64tls.h"
 #ifndef LOG_INFO
 #define LOG_INFO 1
 #endif
@@ -2109,21 +2110,34 @@ static long isProcMem(const char* path)
     return 0;
 }
 
+// buf may not end with NULL and prefix must end with NULL.
+static int start_with(char *buf, ssize_t buflen, char *prefix)
+{
+    size_t pre_len = strlen(prefix);
+    if ((size_t)buflen < pre_len)
+        return 0;
+    return memcmp(buf, prefix, pre_len) == 0;
+}
+
 EXPORT ssize_t my_readlink(x64emu_t* emu, void* path, void* buf, size_t sz)
 {
     if(isProcSelf((const char*)path, "exe")) {
         // special case for self...
-        return strlen(strncpy((char*)buf, emu->context->fullpath, sz));
+        size_t srclen = strlen(emu->context->fullpath);
+        size_t cplen = (srclen >= sz) ? sz : srclen;
+        memcpy(buf, emu->context->fullpath, cplen);
+        return (ssize_t)cplen;
     }
     ssize_t ret = readlink((const char*)path, (char*)buf, sz);
     int pid = (ret>0)?isProcAny(path, "exe"):0;
-    if(ret>0 && (pid!=-1) && (strstr(buf, my_context->box64path)==buf)) {
-        int ok = !strcmp(buf, my_context->box64path);
+    if(ret>0 && (pid!=-1) && start_with(buf, ret, my_context->box64path)) {
+        size_t box64path_len = strlen(my_context->box64path);
+        int ok = !memcmp(buf, my_context->box64path, box64path_len);
         if(!ok) {
-            char _deleted[strlen(my_context->box64path)+strlen(" (deleted)")+1];
+            char _deleted[box64path_len+strlen(" (deleted)")+1];
             strcpy(_deleted, my_context->box64path);
             strcat(_deleted, " (deleted)");
-            ok = !strcmp(buf, _deleted);
+            ok = !memcmp(buf, _deleted, strlen(_deleted));
         }
         if(ok) {
             // this is a process run with box64, try to grab the cmdline of the process to try gather the real binary launched
@@ -2132,36 +2146,36 @@ EXPORT ssize_t my_readlink(x64emu_t* emu, void* path, void* buf, size_t sz)
             sprintf(cmdline_name, "/proc/%d/cmdline", pid);
             FILE* cmdline = fopen(cmdline_name, "r");
             if(cmdline) {
-                ssize_t sz_cmd = 0;
                 char filename[4096] = {0};  // first arg should be the program name
-                sz_cmd = fread(filename, 1, 4095, cmdline); // keep last char to end the string
-                sz = sz_cmd > sz ? sz : sz_cmd;
+                size_t sz_cmd = fread(filename, 1, 4095, cmdline); // keep last char to end the string
                 fclose(cmdline);
                 if(filename[0]=='/') {
+                    size_t guestpath_len = strnlen(filename, sz_cmd);
+                    sz = guestpath_len > sz ? sz : guestpath_len;
                     // absolute path, easy...
-                    strncpy(buf, filename, sz);
-                    if(strlen(filename)<sz)
-                        sz = strlen(filename);
+                    memcpy(buf, filename, sz);
                     return sz;
-                }
-                if(filename[0]=='.') {
+                } else if(filename[0] != 0) {
                     // relative path, need to grap cwd and cannonicalise the path
-                    char cwd_name[strlen(path)+4];
-                    sprintf(cwd_name, "/proc/%d/cwd", pid);
+                    // box64 ./test_app or box64 test_app
+                    char cwd_name[36] = {0};
+                    snprintf(cwd_name, sizeof(cwd_name), "/proc/%d/cwd", pid);
                     char cwd[MAX_PATH] = {0};
-                    if(readlink(cwd_name, cwd, MAX_PATH)>0 && strlen(cwd)+strlen(path)+1<MAX_PATH) {
+                    if(readlink(cwd_name, cwd, MAX_PATH-1)>0 && strlen(cwd)+strlen(filename)+1<MAX_PATH) {
                         strcat(cwd, "/");
-                        strcat(cwd, path);
+                        strcat(cwd, filename);
                         char* real = box_realpath(cwd, NULL);
-                        strncpy(buf, filename, sz);
-                        if(strlen(filename)<sz)
-                            sz = strlen(filename);
+                        // No exit, so failure.
+                        if (!real)
+                            return ret;
+                        size_t sz_real = strlen(real);
+                        sz = sz_real > sz ? sz : sz_real;
+                        memcpy(buf, real, sz);
                         box_free(real);
                         return sz;
                     }
                     // overflow... so falure
                 }
-                // not an absolute or a relative path... forget it
             }
         }
     }
@@ -2667,8 +2681,8 @@ EXPORT int32_t my_epoll_wait(x64emu_t* emu, int32_t epfd, void* events, int32_t 
 {
     struct epoll_event _events[maxevents];
     //AlignEpollEvent(_events, events, maxevents);
-    int32_t ret = epoll_wait(epfd, events?_events:NULL, maxevents, timeout);
-    if(ret>0)
+    int32_t ret = epoll_wait(epfd, _events, maxevents, timeout);
+    if((ret > 0) && events)
         UnalignEpollEvent(events, _events, ret);
     return ret;
 }
@@ -2676,8 +2690,8 @@ EXPORT int32_t my_epoll_pwait(x64emu_t* emu, int32_t epfd, void* events, int32_t
 {
     struct epoll_event _events[maxevents];
     //AlignEpollEvent(_events, events, maxevents);
-    int32_t ret = epoll_pwait(epfd, events?_events:NULL, maxevents, timeout, sigmask);
-    if(ret>0)
+    int32_t ret = epoll_pwait(epfd, _events, maxevents, timeout, sigmask);
+    if((ret > 0) && events)
         UnalignEpollEvent(events, _events, ret);
     return ret;
 }
@@ -2694,10 +2708,10 @@ EXPORT int32_t my_epoll_pwait2(x64emu_t* emu, int epfd, void* events, int maxeve
             if(tmp>1<<31) tmp = 1<<31;
             tout = tmp;
         }
-        ret = epoll_pwait(epfd, events?_events:NULL, maxevents, tout, sigmask);
+        ret = epoll_pwait(epfd, _events, maxevents, tout, sigmask);
     } else
-        ret = my->epoll_pwait2(epfd, events?_events:NULL, maxevents, timeout, sigmask);
-    if(ret>0)
+        ret = my->epoll_pwait2(epfd, _events, maxevents, timeout, sigmask);
+    if((ret > 0) && events)
         UnalignEpollEvent(events, _events, ret);
     return ret;
 }
@@ -3219,6 +3233,30 @@ EXPORT int32_t my_execlp(x64emu_t* emu, const char* path)
     return my_execvp(emu, path, argv);
 }
 
+static char** spawn_env_with_arg0(char* const envp[], const char* name, const char* arg0, char** added)
+{
+    size_t n = 0;
+    size_t replace = (size_t)-1;
+    size_t name_len = strlen(name);
+
+    while (envp && envp[n]) {
+        if (!strncmp(envp[n], name, name_len) && envp[n][name_len] == '=')
+            replace = n;
+        ++n;
+    }
+
+    char** ret = (char**)box_calloc(n + (replace == (size_t)-1 ? 2 : 1), sizeof(char*));
+    if (n)
+        memcpy(ret, envp, n * sizeof(char*));
+    *added = (char*)box_malloc(name_len + strlen(arg0) + 2);
+    sprintf(*added, "%s=%s", name, arg0);
+    if (replace == (size_t)-1)
+        ret[n] = *added;
+    else
+        ret[replace] = *added;
+    return ret;
+}
+
 EXPORT int32_t my_posix_spawn(x64emu_t* emu, pid_t* pid, const char* fullpath,
     const posix_spawn_file_actions_t *actions, const posix_spawnattr_t* attrp,  char* const argv[], char* const envp[])
 {
@@ -3243,15 +3281,20 @@ EXPORT int32_t my_posix_spawn(x64emu_t* emu, pid_t* pid, const char* fullpath,
         if(script) newargv[1] = emu->context->bashpath; // script needs to be launched with bash
         if(python) newargv[1] = emu->context->pythonpath; // python scripts need box64-python
         memcpy(newargv+toadd, argv, (n+1)*sizeof(char*));
+        char** spawn_envp = (char**)envp;
+        char* arg0_env = NULL;
         if(self) newargv[toadd] = emu->context->fullpath;
         else {
-            // TODO check if envp is not environ and add the value on a copy
             if(strcmp(newargv[toadd], fullpath))
-                setenv(x86?"BOX86_ARG0":"BOX64_ARG0", newargv[toadd], 1);
+                spawn_envp = spawn_env_with_arg0(envp, x86?"BOX86_ARG0":"BOX64_ARG0", newargv[toadd], &arg0_env);
             newargv[toadd] = fullpath;
         }
         printf_log(/*LOG_DEBUG*/LOG_INFO, " => posix_spawn(%p, \"%s\", %p, %p, %p [\"%s\", \"%s\", \"%s\"...:%d], %p)\n", pid, newargv[0], actions, attrp, newargv, newargv[0], newargv[1], newargv[2]?newargv[2]:"", n, envp);
-        ret = posix_spawn(pid, newargv[0], actions, attrp, (char* const*)newargv, envp);
+        ret = posix_spawn(pid, newargv[0], actions, attrp, (char* const*)newargv, spawn_envp);
+        if (spawn_envp != envp) {
+            box_free(arg0_env);
+            box_free(spawn_envp);
+        }
         printf_log(/*LOG_DEBUG*/LOG_INFO, "posix_spawn returned %d\n", ret);
         //box_free(newargv);
     } else
@@ -3287,15 +3330,20 @@ EXPORT int32_t my_posix_spawnp(x64emu_t* emu, pid_t* pid, const char* path,
         if(script) newargv[1] = emu->context->bashpath; // script needs to be launched with bash
         if(python) newargv[1] = emu->context->pythonpath; // python scripts need box64-python
         memcpy(newargv+toadd, argv, (n+1)*sizeof(char*));
+        char** spawn_envp = (char**)envp;
+        char* arg0_env = NULL;
         if(self) newargv[toadd] = emu->context->fullpath;
         else {
-            // TODO check if envp is not environ and add the value on a copy
             if(strcmp(newargv[toadd], fullpath))
-                setenv(x86?"BOX86_ARG0":"BOX64_ARG0", newargv[toadd], 1);
+                spawn_envp = spawn_env_with_arg0(envp, x86?"BOX86_ARG0":"BOX64_ARG0", newargv[toadd], &arg0_env);
             newargv[toadd] = fullpath;
         }
         printf_log(/*LOG_DEBUG*/LOG_INFO, " => posix_spawn(%p, \"%s\", %p, %p, %p [\"%s\", \"%s\", \"%s\"...:%d], %p)\n", pid, newargv[0], actions, attrp, newargv, newargv[0], newargv[1], newargv[2]?newargv[2]:"", n, envp);
-        ret = posix_spawn(pid, newargv[0], actions, attrp, (char* const*)newargv, envp);
+        ret = posix_spawn(pid, newargv[0], actions, attrp, (char* const*)newargv, spawn_envp);
+        if (spawn_envp != envp) {
+            box_free(arg0_env);
+            box_free(spawn_envp);
+        }
         printf_log(/*LOG_DEBUG*/LOG_INFO, "posix_spawn returned %d\n", ret);
         //box_free(newargv);
     } else
@@ -3701,7 +3749,7 @@ EXPORT void* my_mmap64(x64emu_t* emu, void *addr, size_t length, int prot, int f
     // their 4k guest pages independently
     if(box64_pagesize > X86_PAGE_SIZE && addr && length && end > start && mapped_end >= end &&
        !(start & (X86_PAGE_SIZE - 1)) && (flags & MAP_FIXED) && (flags & MAP_ANONYMOUS) &&
-       (flags & MAP_PRIVATE) && !(flags & MAP_SHARED) && fd == -1 && !offset && host_end &&
+       (flags & MAP_PRIVATE) && !(flags & MAP_SHARED) && !offset && host_end &&
        (start != host_start || mapped_end != host_end) &&
        (start == host_start || (memExist(host_start) && memExist(host_start + box64_pagesize - 1))) &&
        (mapped_end == host_end || (memExist(host_end - box64_pagesize) && memExist(host_end - 1)))) {
@@ -3863,9 +3911,10 @@ EXPORT void* my_mmap64(x64emu_t* emu, void *addr, size_t length, int prot, int f
             last_mmap_0_len = 0;
         }
         #endif
-        if(emu)
+        if(emu) {
             setProtection_mmap((uintptr_t)ret, length, prot);
-        else
+            setGuestFakeProtection((uintptr_t)ret, length, prot);
+        } else
             setProtection_box((uintptr_t)ret, length, prot);
         if(emulated_first_edge) {
             if(emu)
@@ -3902,18 +3951,21 @@ EXPORT void* my_mremap(x64emu_t* emu, void* old_addr, size_t old_size, size_t ne
         if(ret==old_addr) {
             if(old_size && old_size<new_size) {
                 setProtection_mmap((uintptr_t)ret+old_size, new_size-old_size, prot);
+                setGuestFakeProtection((uintptr_t)ret+old_size, new_size-old_size, prot);
                 #ifdef DYNAREC
                 if(BOX64ENV(dynarec))
                     addDBFromAddressRange((uintptr_t)ret+old_size, new_size-old_size);
                 #endif
             } else if(old_size && new_size<old_size) {
                 freeProtection((uintptr_t)ret+new_size, old_size-new_size);
+                freeGuestFakeProtection((uintptr_t)ret+new_size, old_size-new_size);
                 #ifdef DYNAREC
                 if(BOX64ENV(dynarec))
                     cleanDBFromAddressRange((uintptr_t)ret+new_size, old_size-new_size, 1);
                 #endif
             } else if(!old_size) {
                 setProtection_mmap((uintptr_t)ret, new_size, prot);
+                setGuestFakeProtection((uintptr_t)ret, new_size, prot);
                 #ifdef DYNAREC
                 if(BOX64ENV(dynarec))
                     addDBFromAddressRange((uintptr_t)ret, new_size);
@@ -3926,12 +3978,14 @@ EXPORT void* my_mremap(x64emu_t* emu, void* old_addr, size_t old_size, size_t ne
             #endif
             ) {
                 freeProtection((uintptr_t)old_addr, old_size);
+                freeGuestFakeProtection((uintptr_t)old_addr, old_size);
                 #ifdef DYNAREC
                 if(BOX64ENV(dynarec))
                     cleanDBFromAddressRange((uintptr_t)old_addr, old_size, 1);
                 #endif
             }
             setProtection_mmap((uintptr_t)ret, new_size, prot); // should copy the protection from old block
+            setGuestFakeProtection((uintptr_t)ret, new_size, prot);
             #ifdef DYNAREC
             if(BOX64ENV(dynarec))
                 addDBFromAddressRange((uintptr_t)ret, new_size);
@@ -3988,6 +4042,12 @@ EXPORT int my_munmap(x64emu_t* emu, void* addr, size_t length)
             freeProtection(start, length);
         else if(unmap_length)
             freeProtection(unmap_start, unmap_length);
+        if(partial_host_pages) {
+            setGuestFakeProtection(start, length, 0);
+            if(unmap_length)
+                freeGuestFakeProtection(unmap_start, unmap_length);
+        } else
+            freeGuestFakeProtection(start, length);
         RemoveMapping((uintptr_t)addr, length);
     }
     errno = e;  // preseve errno
@@ -4007,7 +4067,10 @@ EXPORT int my_mprotect(x64emu_t* emu, void *addr, unsigned long len, int prot)
     uintptr_t start = (uintptr_t)addr;
     if(box64_pagesize == X86_PAGE_SIZE) {
         int ret = mprotect(addr, len, prot);
-        if(!ret && len) updateProtection(start, len, prot);
+        if(!ret && len) {
+            updateProtection(start, len, prot);
+            setGuestFakeProtection(start, len, prot);
+        }
         return ret;
     }
     if(start & (X86_PAGE_SIZE - 1)) {
@@ -4020,9 +4083,12 @@ EXPORT int my_mprotect(x64emu_t* emu, void *addr, unsigned long len, int prot)
     uintptr_t host_end = (end + box64_pagesize - 1) & ~(box64_pagesize - 1);
 
     if(host_end - host_start == box64_pagesize && (start != host_start || end != host_end)) {
-        prot |= getProtection(host_start) & ~PROT_CUSTOM;
-        int ret = mprotect((void*)host_start, box64_pagesize, prot);
-        if(!ret) updateProtection(host_start, box64_pagesize, prot);
+        int host_prot = prot | (getProtection(host_start) & ~PROT_CUSTOM);
+        int ret = mprotect((void*)host_start, box64_pagesize, host_prot);
+        if(!ret) {
+            updateProtection(host_start, box64_pagesize, host_prot);
+            setGuestFakeProtection(start, end - start, prot);
+        }
         return ret;
     }
 
@@ -4040,9 +4106,15 @@ EXPORT int my_mprotect(x64emu_t* emu, void *addr, unsigned long len, int prot)
         if(ret) return -1;
         updateProtection(host_end, box64_pagesize, host_prot);
     }
-    if(host_start == host_end) return 0;
+    if(host_start == host_end) {
+        setGuestFakeProtection(start, end - start, prot);
+        return 0;
+    }
     int ret = mprotect((void*)host_start, host_end - host_start, prot);
-    if(!ret) updateProtection(host_start, host_end - host_start, prot);
+    if(!ret) {
+        updateProtection(host_start, host_end - host_start, prot);
+        setGuestFakeProtection(start, end - start, prot);
+    }
     return ret;
 }
 
@@ -4287,6 +4359,30 @@ void obstackSetup();
 EXPORT void* my_malloc(unsigned long size)
 {
     return calloc(1, size);
+}
+
+static int check_getrlimit_buffer(void* rlim, size_t size)
+{
+    if(isGuestRangeFakelyProtected((uintptr_t)rlim, size, PROT_WRITE)) return 1;
+    errno = EFAULT;
+    return 0;
+}
+
+EXPORT int my___getrlimit(x64emu_t* emu, int resource, struct rlimit* rlim)
+{
+    (void)emu;
+    return check_getrlimit_buffer(rlim, sizeof(*rlim)) ? getrlimit(resource, rlim) : -1;
+}
+
+EXPORT int my_getrlimit(x64emu_t* emu, uint32_t resource, struct rlimit* rlim)
+{
+    return my___getrlimit(emu, resource, rlim);
+}
+
+EXPORT int my_getrlimit64(x64emu_t* emu, uint32_t resource, struct rlimit64* rlim)
+{
+    (void)emu;
+    return check_getrlimit_buffer(rlim, sizeof(*rlim)) ? getrlimit64(resource, rlim) : -1;
 }
 
 EXPORT int my_setrlimit(x64emu_t* emu, int ressource, const struct rlimit *rlim)
@@ -4871,6 +4967,7 @@ static int clone_fn(void* p)
     x64emu_t *emu = arg->emu;
     R_RSP = arg->stack;
     emu->flags.quitonexit = 1;
+    if(arg->flags & CLONE_SETTLS) SetFSBaseEmu(emu, arg->tls);
     thread_forget_emu();    //TODO: not all will flags needs this, probably just CLONE_VM?
     thread_set_emu(emu);
     if(arg->flags&CLONE_NEWUSER) {
@@ -4878,8 +4975,7 @@ static int clone_fn(void* p)
     }
     int ret = RunFunctionWithEmu(emu, 0, arg->fnc, 1, arg->args);
     int exited = (emu->flags.quitonexit==2);
-    thread_set_emu(NULL);
-    FreeX64Emu(&emu);
+    thread_set_emu(NULL); // emu is gone...
     if(arg->stack_clone_used)
         my_context->stack_clone_used = 0;
     box_free(arg);
@@ -4913,8 +5009,11 @@ EXPORT int my_clone(x64emu_t* emu, void* fn, void* stack, int flags, void* args,
     arg->tls = tls;
     arg->emu = newemu;
     arg->flags = flags;
-    if((flags|(CLONE_VM|CLONE_VFORK|CLONE_SETTLS))==flags)   // that's difficult to setup, so lets ignore all those flags :S
-        flags&=~(CLONE_VM|CLONE_VFORK|CLONE_SETTLS);
+    // the emulated callback can use wrapped libc before exec, so it cannot safely
+    // share the host allocator and address space with a suspended parent.
+    if((flags & (CLONE_VM|CLONE_VFORK)) == (CLONE_VM|CLONE_VFORK))
+        flags &=~ (CLONE_VM|CLONE_VFORK);
+    flags &=~ CLONE_SETTLS;   // guest TLS is applied to the emulated FS base in clone_fn
     int64_t ret = clone(clone_fn, (void*)((uintptr_t)mystack+1024*1024), flags, arg, parent, NULL, child);
     return (uintptr_t)ret;
 }
@@ -4928,15 +5027,19 @@ EXPORT void my___cxa_pure_virtual(x64emu_t* emu)
 
 EXPORT size_t my_strlcpy(x64emu_t* emu, void* dst, void* src, size_t l)
 {
-    strncpy(dst, src, l-1);
-    ((char*)dst)[l-1] = '\0';
+    if (l > 0) {
+        strncpy(dst, src, l-1);
+        ((char*)dst)[l-1] = '\0';
+    }
     return strlen(src);
 }
 EXPORT size_t my_strlcat(x64emu_t* emu, void* dst, void* src, size_t l)
 {
+    if (l == 0)
+        return strlen(src);
     size_t s = strlen(dst);
     if(s>=l)
-        return l;
+        return s + strlen(src);
     strncat(dst, src, l-s-1);
     ((char*)dst)[l-1] = '\0';
     return s+strlen(src);
@@ -5443,7 +5546,7 @@ EXPORT char* secure_getenv(const char* name)
     my_environ = my__environ = my___environ = box64->envv;                      \
     my___progname_full = my_program_invocation_name = box64->argv[0];           \
     my___progname = my_program_invocation_short_name =                          \
-        strrchr(box64->argv[0], '/') + 1;                                       \
+        (strrchr(box64->argv[0], '/') ? strrchr(box64->argv[0], '/') + 1 : box64->argv[0]); \
     getMy(lib);                                                                 \
     if(box64_isglibc234)                                                        \
         setNeededLibs(lib, NEEDED_LIBS_234);                                    \

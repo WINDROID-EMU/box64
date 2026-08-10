@@ -48,6 +48,89 @@
 // LOCK_* define
 #define LOCK_LOCK (int*)1
 
+typedef enum xmm_width_s {
+    XMM_WIDTH_32,
+    XMM_WIDTH_64,
+    XMM_WIDTH_128,
+} xmm_width_t;
+
+typedef enum xmm_scalar_kind_s {
+    XMM_SCALAR_SS,
+    XMM_SCALAR_SD,
+} xmm_scalar_kind_t;
+
+typedef enum xmm_upper_policy_s {
+    XMM_UPPER_PRESERVE,
+    XMM_UPPER_CLEAR,
+} xmm_upper_policy_t;
+
+typedef struct xmm_scalar_s {
+    int host_dst;
+    int result;
+    xmm_scalar_kind_t kind;
+    xmm_upper_policy_t upper_policy;
+} xmm_scalar_t;
+
+static inline void xmm_live_track(dynarec_la64_t* dyn, int ninst, int reg)
+{
+#if STEP == 0
+    dyn->insts[ninst].vector_liveness.xmm_tracked |= (uint16_t)(1 << reg);
+#endif
+}
+
+static inline void xmm_live_read(dynarec_la64_t* dyn, int ninst, int reg, xmm_width_t width)
+{
+#if STEP == 0
+    xmm_live_track(dyn, ninst, reg);
+    if (width != XMM_WIDTH_32)
+        dyn->insts[ninst].vector_liveness.use.xmm_lane1 |= 1ULL << reg;
+    if (width == XMM_WIDTH_128)
+        dyn->insts[ninst].vector_liveness.use.xmm_lanes23 |= 1ULL << reg;
+#endif
+}
+
+static inline void xmm_live_write(dynarec_la64_t* dyn, int ninst, int reg)
+{
+#if STEP == 0
+    xmm_live_track(dyn, ninst, reg);
+    dyn->insts[ninst].vector_liveness.def.xmm_lane1 |= 1ULL << reg;
+    dyn->insts[ninst].vector_liveness.def.xmm_lanes23 |= 1ULL << reg;
+#endif
+}
+
+static inline void xmm_live_copy(dynarec_la64_t* dyn, int ninst, int dst, int src)
+{
+#if STEP == 0
+    xmm_live_track(dyn, ninst, dst);
+    xmm_live_track(dyn, ninst, src);
+    vector_liveness_t* live = &dyn->insts[ninst].vector_liveness;
+    live->xmm_copy_dst = (uint8_t)(dst + 1);
+    live->xmm_copy_src = (uint8_t)src;
+#endif
+}
+
+static inline void ymm_live_read(dynarec_la64_t* dyn, int ninst, int reg)
+{
+#if STEP == 0
+    dyn->insts[ninst].vector_liveness.use.ymm_upper |= 1ULL << reg;
+#endif
+}
+
+static inline void ymm_live_write(dynarec_la64_t* dyn, int ninst, int reg)
+{
+#if STEP == 0
+    dyn->insts[ninst].vector_liveness.def.ymm_upper |= 1ULL << reg;
+#endif
+}
+
+static inline void ymm_live_zero(dynarec_la64_t* dyn, int ninst, int reg)
+{
+#if STEP == 0
+    ymm_live_write(dyn, ninst, reg);
+    dyn->insts[ninst].vector_liveness.ymm_zero |= (uint16_t)(1 << reg);
+#endif
+}
+
 #if STEP == 0
 #define UP32_READ(r)                                                                \
     do {                                                                            \
@@ -74,6 +157,87 @@
 #define UP32_WRITE32(r) ((void)(r))
 #define UP32_READALL()  ((void)0)
 #endif
+
+static inline int xmm_preserved_lanes_dead(dynarec_la64_t* dyn, int ninst, int reg, xmm_scalar_kind_t kind)
+{
+#if STEP == 0
+    return 0;
+#else
+    uint16_t preserved = dyn->insts[ninst].vector_liveness.live.xmm_lanes23;
+    if (kind == XMM_SCALAR_SS)
+        preserved |= dyn->insts[ninst].vector_liveness.live.xmm_lane1;
+    return !(preserved & (1ULL << reg));
+#endif
+}
+
+static inline int ymm_upper_dead(dynarec_la64_t* dyn, int ninst, int reg)
+{
+#if STEP == 0
+    return 0;
+#else
+    return !(dyn->insts[ninst].vector_liveness.live.ymm_upper & (1ULL << reg));
+#endif
+}
+
+static inline void xmm_scalar_track_write(dynarec_la64_t* dyn, int ninst, int reg, xmm_upper_policy_t upper_policy)
+{
+    if (upper_policy == XMM_UPPER_CLEAR)
+        xmm_live_write(dyn, ninst, reg);
+    else
+        xmm_live_track(dyn, ninst, reg);
+}
+
+static inline int xmm_scalar_begin(dynarec_la64_t* dyn, int ninst, xmm_scalar_t* scalar, int host_dst, int guest_dst, int allow_direct, xmm_scalar_kind_t kind, xmm_upper_policy_t upper_policy)
+{
+    xmm_scalar_track_write(dyn, ninst, guest_dst, upper_policy);
+    scalar->host_dst = host_dst;
+    scalar->result = allow_direct && xmm_preserved_lanes_dead(dyn, ninst, guest_dst, kind) ? host_dst : fpu_get_scratch(dyn);
+    scalar->kind = kind;
+    scalar->upper_policy = upper_policy;
+    return scalar->result;
+}
+
+static inline void xmm_scalar_end(dynarec_la64_t* dyn, int ninst, const xmm_scalar_t* scalar)
+{
+    if (scalar->host_dst == scalar->result)
+        return;
+    if (scalar->upper_policy == XMM_UPPER_CLEAR)
+        VXOR_V(scalar->host_dst, scalar->host_dst, scalar->host_dst);
+    if (scalar->kind == XMM_SCALAR_SS)
+        VEXTRINS_W(scalar->host_dst, scalar->result, 0);
+    else
+        VEXTRINS_D(scalar->host_dst, scalar->result, 0);
+}
+
+static inline void xmm_scalar_move(dynarec_la64_t* dyn, int ninst, int host_dst, int host_src, int guest_dst, xmm_scalar_kind_t kind, xmm_upper_policy_t upper_policy)
+{
+    xmm_scalar_track_write(dyn, ninst, guest_dst, upper_policy);
+    if (xmm_preserved_lanes_dead(dyn, ninst, guest_dst, kind)) {
+        if (upper_policy == XMM_UPPER_PRESERVE || host_dst != host_src) {
+            if (kind == XMM_SCALAR_SS)
+                FMOV_S(host_dst, host_src);
+            else
+                FMOV_D(host_dst, host_src);
+        }
+        return;
+    }
+    if (upper_policy == XMM_UPPER_CLEAR) {
+        if (host_dst == host_src && kind == XMM_SCALAR_SD) {
+            VINSGR2VR_D(host_dst, xZR, 1);
+            return;
+        }
+        if (host_dst == host_src) {
+            int scratch = fpu_get_scratch(dyn);
+            FMOV_S(scratch, host_src);
+            host_src = scratch;
+        }
+        VXOR_V(host_dst, host_dst, host_dst);
+    }
+    if (kind == XMM_SCALAR_SS)
+        VEXTRINS_W(host_dst, host_src, 0);
+    else
+        VEXTRINS_D(host_dst, host_src, 0);
+}
 
 #define COMIS_FCC fcc7
 
@@ -152,7 +316,8 @@ static inline int comis_fuse_inverted(int condition)
 
 #define COMIS_SPILL_S() \
     IFX (X_ALL) { SPILL_EFLAGS(); }
-#define COMIS_SPILL_D() SPILL_EFLAGS()
+#define COMIS_SPILL_D() \
+    IFX (X_ALL) { SPILL_EFLAGS(); }
 #define EMIT_COMIS_FLAGS(type, lhs, rhs, tmp)                                                  \
     do {                                                                                       \
         COMIS_MARK();                                                                          \
@@ -257,13 +422,13 @@ static inline int comis_fuse_inverted(int condition)
 #define GETVDs                   \
     do {                         \
         vd = TO_NAT(vex.v);      \
-        if (rex.w) MARKREGs(vd); \
+        MARKREGs(vd);            \
     } while(0)
 
 #define GETVDsd                  \
     do {                         \
         vd = TO_NAT(vex.v);      \
-        if (rex.w) MARKREGsd(vd); \
+        MARKREGsd(vd);           \
     } while(0)
 
 // GETGW extract x64 register in gd, that is i
@@ -567,6 +732,16 @@ static inline int comis_fuse_inverted(int condition)
         VLD(a, ed, fixedaddress);                                                            \
     }
 
+#define GETEX_AES(a, w, D)                                                                   \
+    if (MODREG) {                                                                            \
+        a = sse_get_reg(dyn, ninst, x1, (nextop & 7) + (rex.b << 3), w);                     \
+    } else {                                                                                 \
+        SMREAD();                                                                            \
+        addr = geted(dyn, addr, ninst, nextop, &ed, x3, x2, &fixedaddress, rex, NULL, 1, D); \
+        VLD(SCRATCH, ed, fixedaddress);                                                      \
+        a = SCRATCH;                                                                         \
+    }
+
 // Put Back EX if it was a memory and not an emm register
 #define PUTEX(a)                  \
     if (!MODREG) {                \
@@ -578,6 +753,7 @@ static inline int comis_fuse_inverted(int condition)
 #define GETEXSD(a, w, D)                                                                     \
     if (MODREG) {                                                                            \
         a = sse_get_reg(dyn, ninst, x1, (nextop & 7) + (rex.b << 3), w);                     \
+        xmm_live_read(dyn, ninst, (nextop & 7) + (rex.b << 3), XMM_WIDTH_64);                \
     } else {                                                                                 \
         SMREAD(); /* TODO */                                                                 \
         a = fpu_get_scratch(dyn);                                                            \
@@ -592,6 +768,7 @@ static inline int comis_fuse_inverted(int condition)
 #define GETEXSS(a, w, D)                                                                     \
     if (MODREG) {                                                                            \
         a = sse_get_reg(dyn, ninst, x1, (nextop & 7) + (rex.b << 3), w);                     \
+        xmm_live_read(dyn, ninst, (nextop & 7) + (rex.b << 3), XMM_WIDTH_32);                \
     } else {                                                                                 \
         SMREAD();                                                                            \
         a = fpu_get_scratch(dyn);                                                            \
@@ -652,11 +829,6 @@ static inline int comis_fuse_inverted(int condition)
         BSTRINS_D(wback, ed, wb2 + 7, wb2); \
     }
 
-#define YMM_UNMARK_UPPER_ZERO(a)        \
-    do {                                \
-        dyn->lsx.avxcache[a].dirty = 0; \
-    } while (0)
-
 // AVX helpers
 // Get VX (might use x1)
 #define GETVYx(a, w) \
@@ -699,6 +871,35 @@ static inline int comis_fuse_inverted(int condition)
         a = fpu_get_scratch(dyn);                                                            \
         VLD(a, ed, fixedaddress);                                                            \
     }
+
+#define GETEYx_AES(a, w, D)                                                                  \
+    if (MODREG) {                                                                            \
+        a = avx_get_reg(dyn, ninst, x1, (nextop & 7) + (rex.b << 3), w, LSX_AVX_WIDTH_128);  \
+    } else {                                                                                 \
+        SMREAD();                                                                            \
+        addr = geted(dyn, addr, ninst, nextop, &ed, x2, x1, &fixedaddress, rex, NULL, 1, D); \
+        VLD(SCRATCH, ed, fixedaddress);                                                      \
+        a = SCRATCH;                                                                         \
+    }
+#define GETEYy_AES(a, w, D)                                                                  \
+    if (MODREG) {                                                                            \
+        a = avx_get_reg(dyn, ninst, x1, (nextop & 7) + (rex.b << 3), w, LSX_AVX_WIDTH_256);  \
+    } else {                                                                                 \
+        SMREAD();                                                                            \
+        addr = geted(dyn, addr, ninst, nextop, &ed, x2, x1, &fixedaddress, rex, NULL, 1, D); \
+        XVLD(SCRATCH, ed, fixedaddress);                                                     \
+        a = SCRATCH;                                                                         \
+    }
+#define GETEYxy_AES(a, w, D)  \
+    if (vex.l) {              \
+        GETEYy_AES(a, w, D);  \
+    } else {                  \
+        GETEYx_AES(a, w, D);  \
+    }
+#define GETGY_empty_VYEYxy_AES(gx, vx, ex, D) \
+    GETVYxy(vx, 0);                            \
+    GETEYxy_AES(ex, 0, D);                     \
+    GETGYxy_empty(gx);
 
 #define GETEYy(a, w, D)                                                                      \
     if (MODREG) {                                                                            \
@@ -941,6 +1142,10 @@ static inline int comis_fuse_inverted(int condition)
 #define BEQ_MARK2(reg1, reg2) Bxx_gen(EQ, MARK2, reg1, reg2)
 // Branch to MARK3 if reg1==reg2 (use j64)
 #define BEQ_MARK3(reg1, reg2) Bxx_gen(EQ, MARK3, reg1, reg2)
+// Branch to MARKF if reg1==reg2 (use j64)
+#define BEQ_MARKF(reg1, reg2) Bxx_gen(EQ, MARKF, reg1, reg2)
+// Branch to MARKF2 if reg1==reg2 (use j64)
+#define BEQ_MARKF2(reg1, reg2) Bxx_gen(EQ, MARKF2, reg1, reg2)
 // Branch to MARKLOCK if reg1==reg2 (use j64)
 #define BEQ_MARKLOCK(reg1, reg2) Bxx_gen(EQ, MARKLOCK, reg1, reg2)
 // Branch to MARKLOCK2 if reg1==reg2 (use j64)
@@ -966,6 +1171,14 @@ static inline int comis_fuse_inverted(int condition)
 #define BNEZ_MARKLOCK(reg) BxxZ_gen(NE, MARKLOCK, reg)
 // Branch to MARKLOCK2 if reg1!=0 (use j64)
 #define BNEZ_MARKLOCK2(reg) BxxZ_gen(NE, MARKLOCK2, reg)
+// Branch to MARKF if reg1!=reg2 (use j64)
+#define BNE_MARKF(reg1, reg2) Bxx_gen(NE, MARKF, reg1, reg2)
+// Branch to MARKF2 if reg1!=reg2 (use j64)
+#define BNE_MARKF2(reg1, reg2) Bxx_gen(NE, MARKF2, reg1, reg2)
+// Branch to MARKF if reg1!=0 (use j64)
+#define BNEZ_MARKF(reg) BxxZ_gen(NE, MARKF, reg)
+// Branch to MARKF2 if reg1!=0 (use j64)
+#define BNEZ_MARKF2(reg) BxxZ_gen(NE, MARKF2, reg)
 
 // Branch to MARK if fcc!=0 (use j64)
 #define BCNEZ_MARK(fcc) BCxxZ_gen(NE, MARK, fcc)
@@ -974,9 +1187,9 @@ static inline int comis_fuse_inverted(int condition)
 // Branch to MARK3 if fcc!=0 (use j64)
 #define BCNEZ_MARK3(fcc) BCxxZ_gen(NE, MARK3, fcc)
 // Branch to MARKLOCK if fcc!=0 (use j64)
-#define BCNEZ_MARKLOCK(fcc) BxxZ_gen(NE, MARKLOCK, fcc)
+#define BCNEZ_MARKLOCK(fcc) BCxxZ_gen(NE, MARKLOCK, fcc)
 // Branch to MARKLOCK2 if fcc!=0 (use j64)
-#define BCNEZ_MARKLOCK2(fcc) BxxZ_gen(NE, MARKLOCK2, fcc)
+#define BCNEZ_MARKLOCK2(fcc) BCxxZ_gen(NE, MARKLOCK2, fcc)
 
 // Branch to MARK if fcc==0 (use j64)
 #define BCEQZ_MARK(fcc) BCxxZ_gen(EQ, MARK, fcc)
@@ -985,9 +1198,9 @@ static inline int comis_fuse_inverted(int condition)
 // Branch to MARK3 if fcc==0 (use j64)
 #define BCEQZ_MARK3(fcc) BCxxZ_gen(EQ, MARK3, fcc)
 // Branch to MARKLOCK if fcc==0 (use j64)
-#define BCEQZ_MARKLOCK(fcc) BxxZ_gen(EQ, MARKLOCK, fcc)
+#define BCEQZ_MARKLOCK(fcc) BCxxZ_gen(EQ, MARKLOCK, fcc)
 // Branch to MARKLOCK2 if fcc==0 (use j64)
-#define BCEQZ_MARKLOCK2(fcc) BxxZ_gen(EQ, MARKLOCK2, fcc)
+#define BCEQZ_MARKLOCK2(fcc) BCxxZ_gen(EQ, MARKLOCK2, fcc)
 
 // Branch to MARK if reg1<reg2 (use j64)
 #define BLT_MARK(reg1, reg2) Bxx_gen(LT, MARK, reg1, reg2)
@@ -1715,7 +1928,7 @@ void emit_test32(dynarec_la64_t* dyn, int ninst, rex_t rex, int s1, int s2, int 
 void emit_test32c(dynarec_la64_t* dyn, int ninst, rex_t rex, int s1, int64_t c, int s3, int s4, int s5);
 void emit_test8(dynarec_la64_t* dyn, int ninst, int s1, int s2, int s3, int s4, int s5);
 void emit_test8c(dynarec_la64_t* dyn, int ninst, int s1, uint8_t c, int s3, int s4, int s5);
-void emit_xor16(dynarec_la64_t* dyn, int ninst, int s1, int s2, int s3, int s4, int s5);
+void emit_xor16(dynarec_la64_t* dyn, int ninst, int s1, int s2, int s3, int s4);
 void emit_xor32(dynarec_la64_t* dyn, int ninst, rex_t rex, int s1, int s2, int s3, int s4);
 void emit_xor32c(dynarec_la64_t* dyn, int ninst, rex_t rex, int s1, int64_t c, int s3, int s4);
 void emit_xor8(dynarec_la64_t* dyn, int ninst, int s1, int s2, int s3, int s4);
@@ -2177,8 +2390,8 @@ uintptr_t dynarec64_DF(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
 #define LOCK_8_OP(op, s1, wback, s3, s4, s5, s6)    \
     if (cpuext.lamcas) {                            \
         LD_BU(s5, wback, 0);                        \
-        MV(s1, s5);                                 \
         MARKLOCK2;                                  \
+        MV(s1, s5);                                 \
         MV(s6, s5);                                 \
         op;                                         \
         AMCAS_DB_B(s5, s4, wback);                  \

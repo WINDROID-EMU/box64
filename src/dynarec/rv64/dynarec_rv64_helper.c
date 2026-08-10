@@ -286,7 +286,7 @@ uintptr_t geted16(dynarec_rv64_t* dyn, uintptr_t addr, int ninst, uint8_t nextop
     uint32_t n = (m >> 6) & 3;
     int64_t offset = 0;
     if (!n && (m & 7) == 6) {
-        offset = F16S;
+        offset = F16;
         MOV32w(ret, offset);
     } else {
         switch (n) {
@@ -379,6 +379,7 @@ void jump_to_epilog(dynarec_rv64_t* dyn, uintptr_t ip, int reg, int ninst)
     }
     TABLE64C(x2, const_epilog);
     SMEND();
+    CHECK_DFNONE(0);
     BR(x2);
 }
 
@@ -398,6 +399,7 @@ void jump_to_epilog_fast(dynarec_rv64_t* dyn, uintptr_t ip, int reg, int ninst)
     }
     TABLE64C(x2, const_epilog_fast);
     SMEND();
+    CHECK_DFNONE(0);
     BR(x2);
 }
 #ifdef JMPTABLE_SHIFT4
@@ -462,6 +464,8 @@ void jump_to_next(dynarec_rv64_t* dyn, uintptr_t ip, int reg, int ninst, int is3
     if (is32bits)
         ip &= 0xffffffffLL;
 
+    CHECK_DFNONE(0);
+
     int dest;
     if (reg) {
         if (reg != xRIP) {
@@ -492,13 +496,14 @@ void ret_to_next(dynarec_rv64_t* dyn, uintptr_t ip, int ninst, rex_t rex)
     MAYUSE(dyn);
     MAYUSE(ninst);
     MESSAGE(LOG_DUMP, "Ret to next\n");
+    CHECK_DFNONE(0);
     MVz(x1, xRIP);
     SMEND();
     if (BOX64DRENV(dynarec_callret)) {
         // pop the actual return address from LA64 stack
-        LD(xRA, xSP, 0);    // native addr
-        LD(x6, xSP, 8);     // x86 addr
-        ADDI(xSP, xSP, 16); // pop
+        LD(xRA, xSP, 0);      // native addr
+        LD(x6, xSP, 8);       // x86 addr
+        ADDI(xSP, xSP, 16);   // pop
         BNE(x6, xRIP, 2 * 4); // is it the right address?
         BR(xRA);
         // not the correct return address, regular jump, but purge the stack first, it's unsync now...
@@ -529,7 +534,7 @@ void iret_to_next(dynarec_rv64_t* dyn, uintptr_t ip, int ninst, int is32bits, in
 
     SH(x2, xEmu, offsetof(x64emu_t, segs[_CS]));
     // clean EFLAGS
-    MOV32w(x1, 0x3E7FF7);   // also masking RF
+    MOV32w(x1, 0x3E7FF7); // also masking RF
     AND(xFlags, xFlags, x1);
     ORI(xFlags, xFlags, 0x2);
     SET_DFNONE();
@@ -563,6 +568,7 @@ void iret_to_next(dynarec_rv64_t* dyn, uintptr_t ip, int ninst, int is32bits, in
 void call_c(dynarec_rv64_t* dyn, int ninst, rv64_consts_t fnc, int reg, int ret, int saveflags, int savereg, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6)
 {
     MAYUSE(fnc);
+    CHECK_DFNONE(1);
     if (savereg == 0)
         savereg = x87pc;
     if (saveflags) {
@@ -628,6 +634,7 @@ void call_c(dynarec_rv64_t* dyn, int ninst, rv64_consts_t fnc, int reg, int ret,
 void call_n(dynarec_rv64_t* dyn, int ninst, void* fnc, int w)
 {
     MAYUSE(fnc);
+    CHECK_DFNONE(1);
     fpu_pushcache(dyn, ninst, x3, 1);
     // save RSP in case there are x86 callbacks...
     SD(xRSP, xEmu, offsetof(x64emu_t, regs[_SP]));
@@ -641,7 +648,7 @@ void call_n(dynarec_rv64_t* dyn, int ninst, void* fnc, int w)
     }
     // native call
     TABLE64_(x3, *(uintptr_t*)fnc); // using x16 as scratch regs for call address
-    // Note that if need_reloc is active, the TABLE64 will trigger cancel block, 
+    // Note that if need_reloc is active, the TABLE64 will trigger cancel block,
     // because native function might be very different on a next run: different function address, different brick, different everything basicaly
     // and we don't have a relocation mecanism here, it's too complex
     JALR(xRA, x3);
@@ -1275,7 +1282,7 @@ void x87_free(dynarec_rv64_t* dyn, int ninst, int s1, int s2, int s3, int st)
     if (ret != -1) {
         const int reg = dyn->e.x87reg[ret];
 #if STEP == 1
-        if (dyn->e.extcache[reg].t == EXT_CACHE_ST_F || dyn->e.extcache[reg].t == EXT_CACHE_ST_I64)
+        if (dyn->e.extcache[EXTIDX(reg)].t == EXT_CACHE_ST_F || dyn->e.extcache[EXTIDX(reg)].t == EXT_CACHE_ST_I64)
             extcache_promote_double(dyn, ninst, st);
 #endif
         // Get top
@@ -1308,7 +1315,7 @@ void x87_free(dynarec_rv64_t* dyn, int ninst, int s1, int s2, int s3, int st)
         }
         // and forget that cache
         fpu_free_reg(dyn, reg);
-        dyn->e.extcache[reg].v = 0;
+        dyn->e.extcache[EXTIDX(reg)].v = 0;
         dyn->e.x87cache[ret] = -1;
         dyn->e.x87reg[ret] = -1;
     } else {
@@ -2145,8 +2152,13 @@ static void loadCache(dynarec_rv64_t* dyn, int ninst, int stack_cnt, int s1, int
     if (cache->extcache[i].v && (cache->extcache[i].t == EXT_CACHE_XMMR || cache->extcache[i].t == EXT_CACHE_XMMW)) {
         SET_CACHE_VECTOR_WIDTH(s1);
         int j = i + 1;
-        while (cache->extcache[j].v)
+        while (j < 24 && cache->extcache[j].v)
             ++j;
+        if (j >= 24) {
+            MESSAGE(LOG_DUMP, "\t  - No free slot to move %d away, aborting\n", i);
+            dyn->abort = 1;
+            return;
+        }
         MESSAGE(LOG_DUMP, "\t  - Moving away %d\n", i);
         VMV_V_V(EXTREG(j), reg);
         cache->extcache[j].v = cache->extcache[i].v;
@@ -2157,8 +2169,13 @@ static void loadCache(dynarec_rv64_t* dyn, int ninst, int stack_cnt, int s1, int
         if (cache->extcache[i].t == EXT_CACHE_SS || cache->extcache[i].t == EXT_CACHE_ST_F)
             single = 1;
         int j = i + 1;
-        while (cache->extcache[j].v)
+        while (j < 24 && cache->extcache[j].v)
             ++j;
+        if (j >= 24) {
+            MESSAGE(LOG_DUMP, "\t  - No free slot to move %d away, aborting\n", i);
+            dyn->abort = 1;
+            return;
+        }
         MESSAGE(LOG_DUMP, "\t  - Moving away %d\n", i);
         if (single) {
             FMVS(EXTREG(j), reg);
@@ -2398,7 +2415,7 @@ static void fpuCacheTransform(dynarec_rv64_t* dyn, int ninst, int s1, int s2, in
                     MESSAGE(LOG_DUMP, "\t  - Convert %s\n", getCacheName(cache.extcache[i].t, cache.extcache[i].n));
                     FCVTLS(s1, EXTREG(i), RD_RTZ);
                     FMVDX(EXTREG(i), s1);
-                    cache.extcache[i].t = EXT_CACHE_ST_D;
+                    cache.extcache[i].t = EXT_CACHE_ST_I64;
                 } else if (cache.extcache[i].t == EXT_CACHE_ST_I64 && cache_i2.extcache[i].t == EXT_CACHE_ST_F) {
                     MESSAGE(LOG_DUMP, "\t  - Convert %s\n", getCacheName(cache.extcache[i].t, cache.extcache[i].n));
                     FMVXD(s1, EXTREG(i));
@@ -2457,31 +2474,45 @@ static void flagsCacheTransform(dynarec_rv64_t* dyn, int ninst, int s1)
     int jmp = dyn->insts[ninst].x64.jmp_insts;
     if (jmp < 0)
         return;
-    if (dyn->f.dfnone || ((dyn->insts[jmp].f_exit.dfnone && !dyn->insts[jmp].f_entry.dfnone) && !dyn->insts[jmp].x64.use_flags)) // flags are fully known, nothing we can do more
+    if (dyn->insts[ninst].f_exit == dyn->insts[jmp].f_entry) // flags will be fully known, nothing we can do more
         return;
     MESSAGE(LOG_DUMP, "\tFlags fetch ---- ninst=%d -> %d\n", ninst, jmp);
-    int go = (dyn->insts[jmp].f_entry.dfnone && !dyn->f.dfnone && !dyn->insts[jmp].df_notneeded) ? 1 : 0;
-    switch (dyn->insts[jmp].f_entry.pending) {
-        case SF_UNKNOWN:
-            go = 0;
-            break;
-        default:
-            if (go && !(dyn->insts[jmp].x64.need_before & X_PEND) && (dyn->f.pending != SF_UNKNOWN)) {
-                // just clear df flags
-                go = 0;
-                SW(xZR, xEmu, offsetof(x64emu_t, df));
+    int go_fetch = 0;
+    switch (dyn->insts[jmp].f_entry) {
+        case status_unk:
+            if (dyn->insts[ninst].f_exit == status_none_pending) {
+                FORCE_DFNONE();
             }
             break;
+        case status_set:
+            if (dyn->insts[ninst].f_exit == status_none_pending) {
+                FORCE_DFNONE();
+            }
+            if (dyn->insts[ninst].f_exit == status_unk)
+                go_fetch = 1;
+            break;
+        case status_none_pending:
+            if (dyn->insts[ninst].f_exit != status_none)
+                go_fetch = 1;
+            break;
+        case status_none:
+            if (dyn->insts[ninst].f_exit == status_none_pending) {
+                FORCE_DFNONE();
+            } else
+                go_fetch = 1;
+            break;
     }
-    if (go) {
-        if (dyn->f.pending != SF_PENDING) {
+    if (go_fetch) {
+        if (dyn->f == status_unk) {
             LWU(s1, xEmu, offsetof(x64emu_t, df));
             j64 = (GETMARKF2) - (dyn->native_size);
             BEQZ(s1, j64);
         }
         CALL_(const_updateflags, -1, 0, 0, 0);
         MARKF2;
+        dyn->f = status_none;
     }
+    MESSAGE(LOG_DUMP, "\t---- Flags fetch\n");
 }
 
 static void sewTransform(dynarec_rv64_t* dyn, int ninst, int s1)
@@ -2596,7 +2627,7 @@ void fpu_reset_cache(dynarec_rv64_t* dyn, int ninst, int reset_n)
     dyn->vector_sew = dyn->insts[reset_n].vector_sew_exit;
 #endif
 #if STEP == 0
-    if(dyn->need_dump && dyn->need_dump != 3 && dyn->e.x87stack) dynarec_log(LOG_NONE, "New x87stack=%d at ResetCache in inst %d with %d\n", dyn->e.x87stack, ninst, reset_n);
+    if (dyn->need_dump && dyn->need_dump != 3 && dyn->e.x87stack) dynarec_log(LOG_NONE, "New x87stack=%d at ResetCache in inst %d with %d\n", dyn->e.x87stack, ninst, reset_n);
 #endif
 #if defined(HAVE_TRACE) && (STEP > 2)
     if (dyn->need_dump && 0) // disable for now
@@ -2660,7 +2691,7 @@ int vector_vsetvli(dynarec_rv64_t* dyn, int ninst, int s1, int sew, int vlmul, f
     uint32_t vl = (int)((float)(16 >> sew) * multiple);
     uint32_t vtypei = (sew << (3 - !!cpuext.xtheadvector)) | vlmul;
     if (dyn->inst_sew == VECTOR_SEWNA || dyn->inst_vl == 0 || dyn->inst_sew != sew || dyn->inst_vl != vl || dyn->inst_vlmul != vlmul) {
-        if (vl == (cpuext.vlen >> (sew - vlmul))) {
+        if (vl == (((uint32_t)cpuext.vlen << vlmul) >> sew)) {
             VSETVLI(s1, xZR, vtypei);
         } else if (vl <= 31 && !cpuext.xtheadvector) {
             VSETIVLI(xZR, vl, vtypei);
