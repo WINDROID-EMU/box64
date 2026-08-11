@@ -82,6 +82,8 @@ x64emurun:
             PrintTrace(emu, addr, 0);
 #endif
         emu->old_ip = addr;
+        if (addr == 0x006da4cf) { /* BO2 Check */ }
+        if (addr == 0x0060d1d9) { /* BO2 Fatal Error Check */ }
 
         #ifndef TEST_INTERPRETER
         // check the TRACE flag before going to next

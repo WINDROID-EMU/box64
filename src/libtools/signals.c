@@ -32,6 +32,103 @@
 #include "threads.h"
 #include "emu/x87emu_private.h"
 #include "custommem.h"
+// === BO2 DRM PATCHES ===
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <syscall.h>
+
+#define MAX_THREADS 32
+#define TLS_BLOCK_SIZE 4096
+static uint8_t tls_pool[MAX_THREADS][TLS_BLOCK_SIZE] __attribute__((aligned(16))) = {0};
+static int tls_pool_used[MAX_THREADS] = {0};
+static pthread_mutex_t tls_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_key_t tls_block_key;
+static pthread_once_t tls_key_once = PTHREAD_ONCE_INIT;
+
+static void tls_key_destructor(void* ptr) {
+    if (ptr) {
+        pthread_mutex_lock(&tls_pool_mutex);
+        for (int i = 0; i < MAX_THREADS; i++) {
+            if (tls_pool[i] == (uint8_t*)ptr) {
+                tls_pool_used[i] = 0;
+                break;
+            }
+        }
+        pthread_mutex_unlock(&tls_pool_mutex);
+    }
+}
+
+static void tls_key_create_once() {
+    pthread_key_create(&tls_block_key, tls_key_destructor);
+}
+
+static uint8_t* allocate_tls_block() {
+    pthread_once(&tls_key_once, tls_key_create_once);
+    uint8_t* existing = (uint8_t*)pthread_getspecific(tls_block_key);
+    if (existing) return existing;
+    pthread_mutex_lock(&tls_pool_mutex);
+    for (int i = 0; i < MAX_THREADS; i++) {
+        if (!tls_pool_used[i]) {
+            tls_pool_used[i] = 1;
+            uint8_t* block = tls_pool[i];
+            pthread_mutex_unlock(&tls_pool_mutex);
+            memset(block, 0, TLS_BLOCK_SIZE);
+            pthread_setspecific(tls_block_key, block);
+            return block;
+        }
+    }
+    pthread_mutex_unlock(&tls_pool_mutex);
+    return NULL;
+}
+
+static void init_fake_tls() {
+    uint8_t* tls_block = allocate_tls_block();
+    if (!tls_block) return;
+    *(uint32_t*)(&tls_block[0x18]) = (uintptr_t)tls_block;
+    *(uint32_t*)(&tls_block[0x2C]) = (uintptr_t)&tls_block[0x400];
+    for(int i=0; i<128; ++i) *(uint32_t*)(&tls_block[0x400 + i*4]) = (uintptr_t)tls_block;
+    uint32_t this_tid = (uint32_t)syscall(__NR_gettid);
+    if (this_tid == 0) this_tid = 1;
+    *(uint32_t*)(tls_block + 0x24) = this_tid;
+    x64emu_t *emu = thread_get_emu();
+    if(emu) {
+        emu->segs_offs[_FS] = (uintptr_t)tls_block;
+    }
+}
+
+static int is_valid_code_range(uint32_t addr) {
+    if (addr >= 0x401000 && addr < 0xB00000) return 1;
+    if (addr >= 0x7b000000 && addr < 0x7c000000) return 1;
+    return 0;
+}
+
+static void proactive_pe_map() {
+    static int pe_mapped = 0;
+    if (pe_mapped) return;
+    void* pe_start = (void*)0x00400000;
+    size_t pe_size = 0x04376000 - 0x00400000;
+    if (msync(pe_start, 1, MS_ASYNC) == -1) {
+        void* result = mmap(pe_start, pe_size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+        if (result != MAP_FAILED) {
+            memset(result, 0, pe_size);
+            mprotect((void*)0x00CF7000, 0x04332000 - 0x00CF7000, PROT_READ | PROT_WRITE | PROT_EXEC);
+        }
+    }
+    pe_mapped = 1;
+}
+
+static uint8_t engine_bootstrap[0x10000] __attribute__((aligned(16)));
+static uint8_t vtable_object[0x5000] __attribute__((aligned(4096)));
+
+#if defined(__aarch64__)
+#define CONTEXT_REG(P, X)   (P)->uc_mcontext.regs[X]
+#define CONTEXT_PC(P)       (P)->uc_mcontext.pc
+#elif defined(__x86_64__)
+#define CONTEXT_REG(P, X)   (P)->uc_mcontext.gregs[X]
+#define CONTEXT_PC(P)       (P)->uc_mcontext.gregs[REG_RIP]
+#endif
+
+
 #include "bridge.h"
 #include "khash.h"
 #include "x64trace.h"
@@ -779,6 +876,8 @@ extern int box64_exit_code;
 
 void my_box64signalhandler(int32_t sig, siginfo_t* info, void * ucntx)
 {
+    proactive_pe_map();
+    init_fake_tls();
     sig = signal_to_x64(sig);
     // sig==X64_SIGSEGV || sig==X64_SIGBUS || sig==X64_SIGILL || sig==X64_SIGABRT here!
     int log_minimum = (BOX64ENV(showsegv))?LOG_NONE:((((sig==X64_SIGSEGV) || (sig==X64_SIGILL)) && my_context->is_sigaction[sig])?LOG_DEBUG:LOG_INFO);
