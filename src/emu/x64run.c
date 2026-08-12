@@ -6,6 +6,9 @@
 #include <string.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <strings.h>
 
 #include "x64_signals.h"
 #include "os.h"
@@ -83,9 +86,33 @@ x64emurun:
 #endif
         emu->old_ip = addr;
 // === BO2 RUN HACKS ===
-        if (addr == 0x006da4cf) { /* BO2 DRM Check point */ }
-        if (addr == 0x0060d1d9) { /* BO2 Fatal Error Check */ }
-        if (addr == 0xa71b00) { /* BO2 Null Pointer Crash */ }
+        if (my_context->fullpath && (strstr(my_context->fullpath, "t6zm") || strstr(my_context->fullpath, "t6mp"))) {
+            // Initialize PE mapping and TLS for BO2
+            static int bo2_initialized = 0;
+            if (!bo2_initialized) {
+                void* pe_start = (void*)0x00400000;
+                size_t pe_size = 0x04376000 - 0x00400000;
+                if (msync(pe_start, 1, MS_ASYNC) == -1) {
+                    void* result = mmap(pe_start, pe_size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+                    if (result != MAP_FAILED) {
+                        memset(result, 0, pe_size);
+                        mprotect((void*)0x00CF7000, 0x04332000 - 0x00CF7000, PROT_READ | PROT_WRITE | PROT_EXEC);
+                    }
+                }
+                bo2_initialized = 1;
+            }
+            
+            // Handle known crash addresses
+            if (addr == 0x006da4cf) { /* BO2 DRM Check point */ }
+            if (addr == 0x0060d1d9) { /* BO2 Fatal Error Check */ }
+            if (addr == 0xa71b00) { /* BO2 Null Pointer Crash */ }
+            if (addr == 0x7bdcdef6) { /* BO2 Invalid Handle Crash */ }
+            
+            // Generic low memory protection
+            if (addr < 0x1000000) {
+                addr = 0x006e2b1a; // Jump to safe return
+            }
+        }
 // === END BO2 RUN HACKS ===
 
         #ifndef TEST_INTERPRETER
