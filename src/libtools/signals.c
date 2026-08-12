@@ -125,6 +125,13 @@ static void bo2_hacks(x64emu_t* emu, siginfo_t* info) {
     uintptr_t current_rip = (uintptr_t)R_RIP;
     printf_log(LOG_INFO, "BO2 DRM: Current RIP = 0x%lx\n", current_rip);
     
+    // Generic CEG protection - prevent crashes in low memory regions
+    if (current_rip < 0x1000000) {
+        printf_log(LOG_INFO, "BO2 DRM: Preventing crash in low memory region at 0x%lx\n", current_rip);
+        R_RIP = 0x006e2b1a; // Jump to safe return
+        return;
+    }
+    
     if (current_rip == 0x733609) {
         printf_log(LOG_INFO, "BO2 DRM: Handling vtable crash at 0x733609\n");
         if (!dat_initialized) {
@@ -140,6 +147,11 @@ static void bo2_hacks(x64emu_t* emu, siginfo_t* info) {
     
     if (current_rip == 0xa71b00) {
         printf_log(LOG_INFO, "BO2 DRM: Handling null pointer crash at 0xa71b00\n");
+        R_RIP = 0x006e2b1a; // Jump to safe return
+    }
+    
+    if (current_rip == 0x7bdcdef6) {
+        printf_log(LOG_INFO, "BO2 DRM: Handling invalid handle crash at 0x7bdcdef6\n");
         R_RIP = 0x006e2b1a; // Jump to safe return
     }
 }
