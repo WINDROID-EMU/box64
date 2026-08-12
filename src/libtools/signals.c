@@ -116,7 +116,7 @@ static void proactive_pe_map() {
 
 static void bo2_hacks(x64emu_t* emu, siginfo_t* info) {
     if (!emu || !emu->context || !emu->context->fullpath) return;
-    if (!strstr(emu->context->fullpath, "t6zm.exe") && !strstr(emu->context->fullpath, "t6mp.exe")) return;
+    if (!strstr(emu->context->fullpath, "t6zm") && !strstr(emu->context->fullpath, "t6mp")) return;
 
     proactive_pe_map();
     init_fake_tls();
