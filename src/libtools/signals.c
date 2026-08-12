@@ -116,7 +116,7 @@ static void proactive_pe_map() {
 
 static void bo2_hacks(x64emu_t* emu, siginfo_t* info) {
     if (!emu || !emu->context || !emu->context->fullpath) return;
-    if (!strstr(emu->context->fullpath, "t6zm") && !strstr(emu->context->fullpath, "t6mp")) return;
+    if (!strstr(emu->context->fullpath, "t6sp") && !strstr(emu->context->fullpath, "t6mp") && !strstr(emu->context->fullpath, "t6zm")) return;
 
     printf_log(LOG_INFO, "BO2 DRM: bo2_hacks activated for %s\n", emu->context->fullpath);
     proactive_pe_map();

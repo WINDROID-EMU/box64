@@ -86,7 +86,7 @@ x64emurun:
 #endif
         emu->old_ip = addr;
 // === BO2 RUN HACKS ===
-        if (my_context->fullpath && (strstr(my_context->fullpath, "t6zm") || strstr(my_context->fullpath, "t6mp"))) {
+        if (my_context->fullpath && (strstr(my_context->fullpath, "t6sp") || strstr(my_context->fullpath, "t6mp") || strstr(my_context->fullpath, "t6zm"))) {
             // Initialize PE mapping and TLS for BO2
             static int bo2_initialized = 0;
             if (!bo2_initialized) {
