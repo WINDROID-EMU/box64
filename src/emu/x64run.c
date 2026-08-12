@@ -85,6 +85,7 @@ x64emurun:
 // === BO2 RUN HACKS ===
         if (addr == 0x006da4cf) { /* BO2 DRM Check point */ }
         if (addr == 0x0060d1d9) { /* BO2 Fatal Error Check */ }
+        if (addr == 0xa71b00) { /* BO2 Null Pointer Crash */ }
 // === END BO2 RUN HACKS ===
 
         #ifndef TEST_INTERPRETER

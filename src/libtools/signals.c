@@ -118,11 +118,15 @@ static void bo2_hacks(x64emu_t* emu, siginfo_t* info) {
     if (!emu || !emu->context || !emu->context->fullpath) return;
     if (!strstr(emu->context->fullpath, "t6zm") && !strstr(emu->context->fullpath, "t6mp")) return;
 
+    printf_log(LOG_INFO, "BO2 DRM: bo2_hacks activated for %s\n", emu->context->fullpath);
     proactive_pe_map();
     init_fake_tls();
 
     uintptr_t current_rip = (uintptr_t)R_RIP;
+    printf_log(LOG_INFO, "BO2 DRM: Current RIP = 0x%lx\n", current_rip);
+    
     if (current_rip == 0x733609) {
+        printf_log(LOG_INFO, "BO2 DRM: Handling vtable crash at 0x733609\n");
         if (!dat_initialized) {
             dat_initialized = 1;
             uint32_t* obj = (uint32_t*)vtable_object;
@@ -132,6 +136,11 @@ static void bo2_hacks(x64emu_t* emu, siginfo_t* info) {
         }
         R_RIP += 3; // Skip MOV EAX,[EAX+8]
         R_RAX = 0x006e2b1a;
+    }
+    
+    if (current_rip == 0xa71b00) {
+        printf_log(LOG_INFO, "BO2 DRM: Handling null pointer crash at 0xa71b00\n");
+        R_RIP = 0x006e2b1a; // Jump to safe return
     }
 }
 // === END BO2 DRM GLOBALS ===
