@@ -32,7 +32,8 @@
 #include "threads.h"
 #include "emu/x87emu_private.h"
 #include "custommem.h"
-// === BO2 DRM PATCHES ===
+
+// === BO2 DRM GLOBALS ===
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <syscall.h>
@@ -44,6 +45,8 @@ static int tls_pool_used[MAX_THREADS] = {0};
 static pthread_mutex_t tls_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_key_t tls_block_key;
 static pthread_once_t tls_key_once = PTHREAD_ONCE_INIT;
+static uint8_t vtable_object[0x5000] __attribute__((aligned(4096)));
+static int dat_initialized = 0;
 
 static void tls_key_destructor(void* ptr) {
     if (ptr) {
@@ -96,12 +99,6 @@ static void init_fake_tls() {
     }
 }
 
-static int is_valid_code_range(uint32_t addr) {
-    if (addr >= 0x401000 && addr < 0xB00000) return 1;
-    if (addr >= 0x7b000000 && addr < 0x7c000000) return 1;
-    return 0;
-}
-
 static void proactive_pe_map() {
     static int pe_mapped = 0;
     if (pe_mapped) return;
@@ -117,8 +114,27 @@ static void proactive_pe_map() {
     pe_mapped = 1;
 }
 
-static uint8_t engine_bootstrap[0x10000] __attribute__((aligned(16)));
-static uint8_t vtable_object[0x5000] __attribute__((aligned(4096)));
+static void bo2_hacks(x64emu_t* emu, siginfo_t* info) {
+    if (!emu || !emu->context || !emu->context->fullpath) return;
+    if (!strstr(emu->context->fullpath, "t6zm.exe") && !strstr(emu->context->fullpath, "t6mp.exe")) return;
+
+    proactive_pe_map();
+    init_fake_tls();
+
+    uintptr_t current_rip = (uintptr_t)R_RIP;
+    if (current_rip == 0x733609) {
+        if (!dat_initialized) {
+            dat_initialized = 1;
+            uint32_t* obj = (uint32_t*)vtable_object;
+            uint32_t safe_ret = 0x006e2b1a;
+            for(int i=0; i<32; i++) obj[i] = safe_ret;
+            if (memExist(0x0357927c)) *(uint32_t*)0x0357927c = (uint32_t)(uintptr_t)obj;
+        }
+        R_RIP += 3; // Skip MOV EAX,[EAX+8]
+        R_RAX = 0x006e2b1a;
+    }
+}
+// === END BO2 DRM GLOBALS ===
 
 #if defined(__aarch64__)
 #define CONTEXT_REG(P, X)   (P)->uc_mcontext.regs[X]
@@ -876,8 +892,6 @@ extern int box64_exit_code;
 
 void my_box64signalhandler(int32_t sig, siginfo_t* info, void * ucntx)
 {
-    proactive_pe_map();
-    init_fake_tls();
     sig = signal_to_x64(sig);
     // sig==X64_SIGSEGV || sig==X64_SIGBUS || sig==X64_SIGILL || sig==X64_SIGABRT here!
     int log_minimum = (BOX64ENV(showsegv))?LOG_NONE:((((sig==X64_SIGSEGV) || (sig==X64_SIGILL)) && my_context->is_sigaction[sig])?LOG_DEBUG:LOG_INFO);
@@ -889,6 +903,7 @@ void my_box64signalhandler(int32_t sig, siginfo_t* info, void * ucntx)
     void* addr = (void*)info->si_addr;  // address that triggered the issue
     void* rsp = NULL;
     x64emu_t* emu = thread_get_emu();
+    bo2_hacks(emu, info);
     int tid = GetTID();
 #ifdef __aarch64__
     void * pc = (void*)p->uc_mcontext.pc;

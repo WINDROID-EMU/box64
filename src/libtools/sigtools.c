@@ -116,6 +116,42 @@ if(BOX64ENV(showsegv)) printf_log(LOG_INFO, "Marked db %p as dirty, and address 
 #endif
 int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, dynablock_t* db, uintptr_t x64pc, int is32bits)
 {
+#ifdef ARM64
+    ucontext_t *p = (ucontext_t *)ucntx;
+#endif
+// === BO2 SIGBUS HACKS ===
+#ifdef ARM64
+    uint32_t opcode = *(uint32_t*)pc;
+    if((opcode&0b10111111110000000000000000000000)==0b10111001000000000000000000000000) {
+        int scale = (opcode>>30)&3;
+        int val = opcode&31;
+        int dest = (opcode>>5)&31;
+        uint64_t offset = (opcode>>10)&0b111111111111;
+        offset<<=scale;
+        volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
+        if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        uint64_t value = p->uc_mcontext.regs[val];
+        for(int i=0; i<(1<<scale); ++i) addr[i] = (value>>(i*8))&0xff;
+        p->uc_mcontext.pc+=4;
+        return 1;
+    }
+    if((opcode&0b10111111110000000000000000000000)==0b10111001010000000000000000000000) {
+        int scale = (opcode>>30)&3;
+        int val = opcode&31;
+        int dest = (opcode>>5)&31;
+        uint64_t offset = (opcode>>10)&0b111111111111;
+        offset<<=scale;
+        volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
+        if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        uint64_t value = 0;
+        for(int i=0; i<(1<<scale); ++i) value |= ((uint64_t)addr[i]) << (i*8);
+        p->uc_mcontext.regs[val] = value;
+        p->uc_mcontext.pc+=4;
+        return 1;
+    }
+#endif
+// === END BO2 SIGBUS HACKS ===
+
     if((uintptr_t)pc<0x10000)
         return 0;
 #ifdef DYNAREC
@@ -123,8 +159,8 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         /*return*/ mark_db_unaligned(db, x64pc);    // don't force an exit for now
 #endif
 #ifdef ARM64
-    ucontext_t *p = (ucontext_t *)ucntx;
-    uint32_t opcode = *(uint32_t*)pc;
+    // ucontext_t *p already defined
+    // uint32_t opcode already defined
     struct fpsimd_context *fpsimd = (struct fpsimd_context *)_fpsimd;
     //printf_log(LOG_INFO, "Checking SIGBUS special cases with pc=%p, opcode=%x, fpsimd=%p\n", pc, opcode, fpsimd);
     if((opcode&0b10111111110000000000000000000000)==0b10111001000000000000000000000000) {
