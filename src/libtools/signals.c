@@ -913,6 +913,17 @@ extern int box64_exit_code;
 
 void my_box64signalhandler(int32_t sig, siginfo_t* info, void * ucntx)
 {
+    // Ignore SIGCHLD (17) and SIGQUIT (3) for BO2 to prevent crashes
+    if (sig == SIGCHLD || sig == SIGQUIT) {
+        x64emu_t* emu = thread_get_emu();
+        if (emu && emu->context && emu->context->fullpath) {
+            if (strstr(emu->context->fullpath, "t6sp") || strstr(emu->context->fullpath, "t6mp") || strstr(emu->context->fullpath, "t6zm")) {
+                printf_log(LOG_INFO, "BO2 DRM: Ignoring signal %d at address 0x%p\n", sig, info->si_addr);
+                return;
+            }
+        }
+    }
+    
     sig = signal_to_x64(sig);
     // sig==X64_SIGSEGV || sig==X64_SIGBUS || sig==X64_SIGILL || sig==X64_SIGABRT here!
     int log_minimum = (BOX64ENV(showsegv))?LOG_NONE:((((sig==X64_SIGSEGV) || (sig==X64_SIGILL)) && my_context->is_sigaction[sig])?LOG_DEBUG:LOG_INFO);
