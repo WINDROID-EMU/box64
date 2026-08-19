@@ -1159,6 +1159,7 @@ if(LARCH64_DYNAREC)
         ${DYNAREC_SRC}
 
         "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_functions.c"
+        "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_native.c"
         "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_arch.c"
         "${BOX64_ROOT}/src/dynarec/la64/la64_printer.c"
         "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_jmpnext.c"
@@ -1175,11 +1176,16 @@ if(LARCH64_DYNAREC)
 
     set(DYNAREC_PASS
     "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_helper.c"
+    "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_native_pass.c"
     "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_emit_tests.c"
     "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_emit_math.c"
     "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_emit_shift.c"
     "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_emit_logic.c"
     "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_00.c"
+    "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_00_0.c"
+    "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_00_1.c"
+    "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_00_2.c"
+    "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_00_3.c"
     "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_0f.c"
     "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_66.c"
     "${BOX64_ROOT}/src/dynarec/la64/dynarec_la64_660f.c"

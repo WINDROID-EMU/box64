@@ -997,7 +997,7 @@ uintptr_t dynarec64_66(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                     break;
                 default:
                     INST_NAME("CMPSW");
-                    SETFLAGS(X_ALL, SF_SET_PENDING, NAT_FLAGS_FUSION);
+                    SETFLAGS(X_ALL, SF_SET_PENDING, NAT_FLAGS_NOFUSION);
                     GETDIR(x3, x1, 2);
                     if (rex.is67 && !rex.is32bits) {
                         ZEROUP(xRSI);
@@ -1360,7 +1360,10 @@ uintptr_t dynarec64_66(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
             switch ((nextop >> 3) & 7) {
                 case 0:
                     INST_NAME("ROL Ew, CL");
-                    SETFLAGS(X_OF | X_CF, SF_SUBSET, NAT_FLAGS_FUSION);
+                    if (BOX64DRENV(dynarec_safeflags) > 1) {
+                        READFLAGS(X_OF | X_CF);
+                    }
+                    SETFLAGS(X_OF | X_CF, SF_SUBSET, NAT_FLAGS_NOFUSION);
                     ANDI(x2, xRCX, 0x1f);
                     BEQ_NEXT(x2, xZR);
                     GETEW(x1, 0);
@@ -1369,7 +1372,10 @@ uintptr_t dynarec64_66(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                     break;
                 case 1:
                     INST_NAME("ROR Ew, CL");
-                    SETFLAGS(X_OF | X_CF, SF_SUBSET, NAT_FLAGS_FUSION);
+                    if (BOX64DRENV(dynarec_safeflags) > 1) {
+                        READFLAGS(X_OF | X_CF);
+                    }
+                    SETFLAGS(X_OF | X_CF, SF_SUBSET, NAT_FLAGS_NOFUSION);
                     ANDI(x2, xRCX, 0x1f);
                     BEQ_NEXT(x2, xZR);
                     GETEW(x1, 0);
@@ -1383,7 +1389,7 @@ uintptr_t dynarec64_66(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                     } else {
                         READFLAGS(X_CF);
                     }
-                    SETFLAGS(X_OF | X_CF, SF_SUBSET, NAT_FLAGS_FUSION);
+                    SETFLAGS(X_OF | X_CF, SF_SUBSET, NAT_FLAGS_NOFUSION);
                     ANDI(x2, xRCX, 0x1f);
                     GETEW(x1, 0);
                     emit_rcl16(dyn, ninst, x1, x2, x4, x5, x6);
@@ -1396,7 +1402,7 @@ uintptr_t dynarec64_66(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                     } else {
                         READFLAGS(X_CF);
                     }
-                    SETFLAGS(X_OF | X_CF, SF_SUBSET, NAT_FLAGS_FUSION);
+                    SETFLAGS(X_OF | X_CF, SF_SUBSET, NAT_FLAGS_NOFUSION);
                     ANDI(x2, xRCX, 0x1f);
                     GETEW(x1, 0);
                     emit_rcr16(dyn, ninst, x1, x2, x4, x5, x6);
@@ -1504,8 +1510,8 @@ uintptr_t dynarec64_66(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                     SRLI(x1, x1, 16);
                     OR(xRDX, xRDX, x1);
                     IFX (X_SF) {
-                        SRLI(x3, xRDX, 15);
-                        SLLI(x3, x3, F_SF);
+                        SRLI(x3, xRAX, 15 - F_SF);
+                        ANDI(x3, x3, 1 << F_SF);
                         OR(xFlags, xFlags, x3);
                     }
                     IFX (X_PF) emit_pf(dyn, ninst, xRAX, x3, x4);
@@ -1517,7 +1523,6 @@ uintptr_t dynarec64_66(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                     SLLI(x2, xRAX, 16);
                     SRAIW(x2, x2, 16);
                     MULW(x1, x2, x1);
-                    ZEROUP(x1);
                     SET_DFNONE();
                     CLEAR_FLAGS();
                     IFX (X_CF | X_OF) {
@@ -1531,14 +1536,15 @@ uintptr_t dynarec64_66(dynarec_rv64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                             OR(xFlags, xFlags, x3);
                         }
                     }
+                    ZEROUP(x1);
                     INSHz(xRAX, x1, x4, x5, 1, 1);
                     SRLI(xRDX, xRDX, 16);
                     SLLI(xRDX, xRDX, 16);
                     SRLI(x1, x1, 16);
                     OR(xRDX, xRDX, x1);
                     IFX (X_SF) {
-                        SRLI(x3, xRAX, 15);
-                        SLLI(x3, x3, F_SF);
+                        SRLI(x3, xRAX, 15 - F_SF);
+                        ANDI(x3, x3, 1 << F_SF);
                         OR(xFlags, xFlags, x3);
                     }
                     IFX (X_PF) emit_pf(dyn, ninst, xRAX, x3, x4);

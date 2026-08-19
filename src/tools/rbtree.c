@@ -268,7 +268,8 @@ static int remove_node(rbtree_t *tree, rbnode *node) {
     // Update cache
     if (node == tree->leftmost)
         tree->leftmost = succ_node(node);
-    else if (node == tree->rightmost)
+    // If the rbtree has only one node, the rightmost also needs to be updated.
+    if (node == tree->rightmost)
         tree->rightmost = pred_node(node);
     
     if (node->left && node->right) {
@@ -628,6 +629,46 @@ int rb_get_end_64(rbtree_t* tree, uintptr_t addr, uint64_t* val, uintptr_t* end)
         *end = next->start;
     } else {
         *end = (uintptr_t)-1;
+    }
+    return 0;
+}
+
+int rb_find_free_range(rbtree_t* tree, uintptr_t start, uintptr_t upper, size_t size, uintptr_t align_mask, uintptr_t* result)
+{
+    if (!tree || !result || start >= upper || size > upper - start)
+        return 0;
+
+    uintptr_t cur = start;
+    rbnode *node = tree->root, *next = NULL;
+
+    while (node) {
+        if (node->end <= cur) {
+            node = node->right;
+        } else {
+            next = node;
+            node = node->left;
+        }
+    }
+
+    node = next;
+    while (node && cur < upper) {
+        if (node->start >= upper)
+            break;
+        if (cur < node->start && size <= node->start - cur) {
+            *result = cur;
+            return 1;
+        }
+        if (cur < node->end) {
+            if (node->end >= upper)
+                return 0;
+            cur = (node->end + align_mask) & ~align_mask;
+        }
+        node = succ_node(node);
+    }
+
+    if (cur < upper && size <= upper - cur) {
+        *result = cur;
+        return 1;
     }
     return 0;
 }

@@ -2911,33 +2911,19 @@ void* find31bitBlockNearHint(void* hint_, size_t size, uintptr_t mask)
 {
     // first, check if program break as changed
     catchup_brk_protection();
-    uint32_t prot;
     uintptr_t hint = (uintptr_t)hint_;
     if(hint_<LOWEST) hint = (uintptr_t)WINE_LOWEST;
-    uintptr_t bend = 0;
     uintptr_t cur = (uintptr_t)hint;
     uintptr_t upper = 0xc0000000LL;
     if(cur>upper) upper = 0x100000000LL;
     if(!mask) mask = 0xffff;
-    while(cur<upper) {
-        if(!rb_get_end(mapallmem, cur, &prot, &bend)) {
-            if(bend-cur>=size)
-                return (void*)cur;
-        }
-        // granularity 0x10000
-        cur = (bend+mask)&~mask;
-    }
+    if(rb_find_free_range(mapallmem, cur, upper, size, mask, &cur))
+        return (void*)cur;
     if(hint_)
         return NULL;
     cur = (uintptr_t)LOWEST;
-    while(cur<(uintptr_t)hint) {
-        if(!rb_get_end(mapallmem, cur, &prot, &bend)) {
-            if(bend-cur>=size)
-                return (void*)cur;
-        }
-        // granularity 0x10000
-        cur = (bend+mask)&~mask;
-    }
+    if(rb_find_free_range(mapallmem, cur, hint, size, mask, &cur))
+        return (void*)cur;
     return NULL;
 }
 
@@ -2962,19 +2948,11 @@ void* find47bitBlockNearHint(void* hint, size_t size, uintptr_t mask)
 {
     // first, check if program break as changed
     catchup_brk_protection();
-    uint32_t prot;
     if(hint<LOWEST) hint = LOWEST;
-    uintptr_t bend = 0;
     uintptr_t cur = (uintptr_t)hint;
     if(!mask) mask = 0xffff;
-    while(bend<0x800000000000LL) {
-        if(!rb_get_end(mapallmem, cur, &prot, &bend)) {
-            if(bend-cur>=size)
-                return (void*)cur;
-        }
-        // granularity 0x10000
-        cur = (bend+mask)&~mask;
-    }
+    if(rb_find_free_range(mapallmem, cur, 0x800000000000LL, size, mask, &cur))
+        return (void*)cur;
     return NULL;
 }
 void* find47bitBlockElf(size_t size, int mainbin, uintptr_t mask)
@@ -3330,30 +3308,43 @@ void getLockAddressRange(uintptr_t start, size_t size, uintptr_t addrs[])
 #ifndef MAP_32BIT
 #define MAP_32BIT 0x40
 #endif
+
+#ifndef NOALIGN
+#define BOX64_MMAP47_LIMIT (1ULL << 47)
+
+static int fits47Bits(void* addr, size_t length)
+{
+    return (uintptr_t)addr < BOX64_MMAP47_LIMIT && length <= BOX64_MMAP47_LIMIT - (uintptr_t)addr;
+}
+
+static int needsWine64KBAlignment(void* addr)
+{
+    return box64_wine && box64_pagesize == X86_PAGE_SIZE && ((uintptr_t)addr & 0xffff);
+}
+#endif
 EXPORT void* box_mmap(void *addr, size_t length, int prot, int flags, int fd, ssize_t offset)
 {
     if(prot&PROT_WRITE)
         prot|=PROT_READ;    // PROT_READ is implicit with PROT_WRITE on i386
     int new_flags = flags;
     void* old_addr = addr;
+    int check_47bit = 0;
     #ifndef NOALIGN
     new_flags&=~MAP_32BIT;   // remove MAP_32BIT
     if((flags&MAP_32BIT) && !(flags&MAP_FIXED)) {
         // MAP_32BIT only exist on x86_64!
         addr = find31bitBlockNearHint(old_addr, length, 0);
-    } else if (box64_wine || 1) {   // other mmap should be restricted to 47bits
-        if (!(flags&MAP_FIXED) && !addr)
-            addr = find47bitBlock(length);
-    }
+    } else if (!(flags & MAP_FIXED) && !addr)
+        check_47bit = 1;
     #endif
     void* ret = InternalMmap(addr, length, prot, new_flags, fd, offset);
     // io_uring doesn't support non-NULL address.
     // The optimal approach is to detect whether an fd is an io_uring instance,
     // but this is overly complex. So we simply retry the mmap call with the
     // original address here.
-    if (ret == MAP_FAILED && old_addr == NULL && fd >= 0)
+    if (ret == MAP_FAILED && old_addr == NULL && fd >= 0 && addr != old_addr)
         ret = InternalMmap(old_addr, length, prot, new_flags, fd, offset);
-#if !defined(NOALIGN)
+    #if !defined(NOALIGN)
     if((ret!=MAP_FAILED) && (flags&MAP_32BIT) &&
       (((uintptr_t)ret>0xffffffffLL) || ((box64_wine) && ((uintptr_t)ret&0xffff) && (ret!=addr)))) {
         int olderr = errno;
@@ -3365,8 +3356,29 @@ EXPORT void* box_mmap(void *addr, size_t length, int prot, int flags, int fd, ss
         ret = InternalMmap(addr, length, prot, new_flags, fd, offset);
         if(old_addr && ret!=old_addr && ret!=MAP_FAILED)
             errno = olderr;
-    } else if((ret!=MAP_FAILED) && !(flags&MAP_FIXED) && ((box64_wine)) && (addr && (addr!=ret)) &&
-             (((uintptr_t)ret>0x7fffffffffffLL) || ((uintptr_t)ret&~0xffff))) {
+    } else if ((ret != MAP_FAILED) && check_47bit && (!fits47Bits(ret, length) || needsWine64KBAlignment(ret))) {
+        int olderr = errno;
+        InternalMunmap(ret, length);
+        loadProtectionFromMap(); // reload map, because something went wrong previously
+        addr = find47bitBlock(length);
+        if (addr && isBlockFree(addr, length)) {
+            new_flags |= MAP_FIXED;
+            if ((new_flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) == (MAP_FIXED | MAP_FIXED_NOREPLACE))
+                new_flags &= ~MAP_FIXED_NOREPLACE;
+            ret = InternalMmap(addr, length, prot, new_flags, fd, offset);
+            if (ret != MAP_FAILED && (!fits47Bits(ret, length) || needsWine64KBAlignment(ret))) {
+                InternalMunmap(ret, length);
+                ret = MAP_FAILED;
+                errno = ENOMEM;
+            }
+        } else {
+            ret = MAP_FAILED;
+            errno = ENOMEM;
+        }
+        if (old_addr && ret != old_addr && ret != MAP_FAILED)
+            errno = olderr;
+    } else if ((ret != MAP_FAILED) && !(flags & MAP_FIXED) && ((box64_wine)) && (addr && (addr != ret))
+        && (((uintptr_t)ret > 0x7fffffffffffLL) || (box64_pagesize == X86_PAGE_SIZE && ((uintptr_t)ret & 0xffff)))) {
         int olderr = errno;
         InternalMunmap(ret, length);
         loadProtectionFromMap();    // reload map, because something went wrong previously

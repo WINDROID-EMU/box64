@@ -484,11 +484,14 @@ void jump_to_next(dynarec_rv64_t* dyn, uintptr_t ip, int reg, int ninst, int is3
     }
     CLEARIP();
     SMEND();
-#ifdef HAVE_TRACE
-    JALR(xRA, dest);
-#else
+    // #ifdef HAVE_TRACE
+    // The JALR(xRA, ...) form is only for gdb backtraces, but it breaks the
+    // return-address-stack prediction on every block-to-block jump, which is
+    // not worth it. Uncomment temporarily when debugging with gdb.
+    // JALR(xRA, dest);
+    // #else
     JALR((dyn->insts[ninst].x64.has_callret ? xRA : xZR), dest);
-#endif
+    // #endif
 }
 
 void ret_to_next(dynarec_rv64_t* dyn, uintptr_t ip, int ninst, rex_t rex)
@@ -2510,7 +2513,6 @@ static void flagsCacheTransform(dynarec_rv64_t* dyn, int ninst, int s1)
         }
         CALL_(const_updateflags, -1, 0, 0, 0);
         MARKF2;
-        dyn->f = status_none;
     }
     MESSAGE(LOG_DUMP, "\t---- Flags fetch\n");
 }

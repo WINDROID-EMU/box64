@@ -19,6 +19,8 @@ void fpu_reset_scratch(dynarec_la64_t* dyn);
 int fpu_get_reg_x87(dynarec_la64_t* dyn, int t, int n);
 // Get an XMM quad reg
 int fpu_get_reg_xmm(dynarec_la64_t* dyn, int t, int xmm);
+// Get a temporary cached renamed scalar register, or -1 when none is available
+int fpu_get_reg_xmm_scalar(dynarec_la64_t* dyn, int t, int xmm);
 // Get an YMM quad reg
 int fpu_get_reg_ymm(dynarec_la64_t* dyn, int t, int ymm);
 // Free a FPU/MMX/XMM reg
@@ -70,7 +72,9 @@ int fpu_is_st_freed(dynarec_native_t* dyn, int ninst, int st);
 void propagateFpuBarrier(dynarec_la64_t* dyn);
 void updateNativeFlags(dynarec_la64_t* dyn);
 void get_free_scratch(dynarec_la64_t* dyn, int ninst, uint8_t* tmp1, uint8_t* tmp2, uint8_t* tmp3, uint8_t s1, uint8_t s2, uint8_t s3, uint8_t s4, uint8_t s5);
+int isUpper32Zero(dynarec_la64_t* dyn, int ninst, int reg);
 
 void updateUpperLiveness(dynarec_la64_t* dyn);
 void updateRspMerge(dynarec_la64_t* dyn, int is32bits);
+void updatePreloads(dynarec_la64_t* dyn);
 #endif //__DYNAREC_LA64_FUNCTIONS_H__

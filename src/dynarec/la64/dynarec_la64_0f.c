@@ -26,6 +26,15 @@
 #include "elfloader.h"
 #include "../dynarec_helper.h"
 
+static const uint32_t sha256_sigma_pair_rot[6] __attribute__((aligned(16))) = {
+    6,
+    2,
+    11,
+    13,
+    25,
+    22,
+};
+
 uintptr_t dynarec64_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ninst, rex_t rex, int* ok, int* need_epilog)
 {
     (void)ip;
@@ -680,45 +689,112 @@ uintptr_t dynarec64_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                     VROTRI_W(d0, d0, 31);
                     VXOR_V(q0, q0, d0);
                     break;
-                case 0xCB ... 0xCD:
-                    u8 = nextop;
-                    switch (u8) {
-                        case 0xCB:
-                            INST_NAME("SHA256RNDS2 Gx, Ex");
-                            break;
-                        case 0xCC:
-                            INST_NAME("SHA256MSG1 Gx, Ex");
-                            break;
-                        case 0xCD:
-                            INST_NAME("SHA256MSG2 Gx, Ex");
-                            break;
-                    }
+                case 0xCB: {
+                    INST_NAME("SHA256RNDS2 Gx, Ex");
                     nextop = F8;
-                    if (MODREG) {
-                        ed = (nextop & 7) + (rex.b << 3);
-                        sse_reflect_reg(dyn, ninst, ed);
-                        ADDI_D(x2, xEmu, offsetof(x64emu_t, xmm[ed]));
-                        ed = x2;
-                    } else {
-                        SMREAD();
-                        addr = geted(dyn, addr, ninst, nextop, &ed, x2, x1, &fixedaddress, rex, NULL, 0, 0);
-                    }
-                    GETG;
-                    sse_forget_reg(dyn, ninst, gd);
-                    ADDI_D(x1, xEmu, offsetof(x64emu_t, xmm[gd]));
-                    sse_reflect_reg(dyn, ninst, 0);
-                    switch (u8) {
-                        case 0xCB:
-                            CALL(const_sha256rnds2, -1, x1, ed);
-                            break;
-                        case 0xCC:
-                            CALL(const_sha256msg1, -1, x1, ed);
-                            break;
-                        case 0xCD:
-                            CALL(const_sha256msg2, -1, x1, ed);
-                            break;
-                    }
+                    GETGX(q0, 1);
+                    GETEX(q1, 0, 0);
+                    int qxmm0 = sse_get_reg(dyn, ninst, x1, 0, 0);
+                    int packed = MODREG ? fpu_get_scratch(dyn) : q1;
+                    int ae_pair = fpu_get_scratch(dyn);
+                    int fb_pair = fpu_get_scratch(dyn);
+                    int gc_pair = fpu_get_scratch(dyn);
+                    int sigma = fpu_get_scratch(dyn);
+                    int mix = fpu_get_scratch(dyn);
+
+                    TABLE64_(x4, (uintptr_t)sha256_sigma_pair_rot);
+                    VLDREPL_D(sigma, x4, 0);
+                    VLDREPL_D(mix, x4, 8);
+                    VLDREPL_D(SCRATCH, x4, 16);
+
+                    VPICKOD_W(ae_pair, q1, q1);
+                    VPICKEV_W(fb_pair, q1, q1);
+                    VADD_W(packed, qxmm0, q0);
+                    VPICKOD_W(gc_pair, q0, q0);
+                    VROTR_W(sigma, ae_pair, sigma);
+                    VROTR_W(mix, ae_pair, mix);
+                    VROTR_W(SCRATCH, ae_pair, SCRATCH);
+                    VXOR_V(sigma, sigma, mix);
+                    VXOR_V(sigma, sigma, SCRATCH);
+
+                    VXOR_V(mix, ae_pair, gc_pair);
+                    VBITSEL_V(mix, ae_pair, fb_pair, mix);
+                    VBITSEL_V(SCRATCH, gc_pair, fb_pair, ae_pair);
+                    VADD_W(SCRATCH, SCRATCH, packed);
+                    VEXTRINS_W(SCRATCH, mix, VEXTRINS_IMM_4_0(1, 1));
+                    VADD_W(sigma, sigma, SCRATCH);
+                    VLDREPL_D(SCRATCH, x4, 16);
+                    VSHUF4I_W(mix, sigma, 0x00);
+                    VEXTRINS_W(sigma, q0, VEXTRINS_IMM_4_0(0, 2));
+                    VADD_W(gc_pair, sigma, mix); // [e1, a1, e1, a1]
+
+                    VLDREPL_D(sigma, x4, 0);
+                    VLDREPL_D(mix, x4, 8);
+                    VROTR_W(sigma, gc_pair, sigma);
+                    VROTR_W(mix, gc_pair, mix);
+                    VROTR_W(SCRATCH, gc_pair, SCRATCH);
+                    VXOR_V(sigma, sigma, mix);
+                    VXOR_V(sigma, sigma, SCRATCH);
+
+                    VXOR_V(mix, gc_pair, fb_pair);
+                    VBITSEL_V(mix, gc_pair, ae_pair, mix);
+                    VBITSEL_V(SCRATCH, fb_pair, ae_pair, gc_pair);
+                    VSHUF4I_W(packed, packed, 0x55);
+                    VADD_W(SCRATCH, SCRATCH, packed);
+                    VEXTRINS_W(SCRATCH, mix, VEXTRINS_IMM_4_0(1, 1));
+                    VADD_W(sigma, sigma, SCRATCH);
+                    VSHUF4I_W(mix, sigma, 0x00);
+                    VEXTRINS_W(sigma, q0, VEXTRINS_IMM_4_0(0, 3));
+                    VADD_W(sigma, sigma, mix); // [e2, a2, e2, a2]
+
+                    VILVL_W(q0, sigma, gc_pair); // [e1, e2, a1, a2]
                     break;
+                }
+                case 0xCC: {
+                    INST_NAME("SHA256MSG1 Gx, Ex");
+                    nextop = F8;
+                    GETGX(q0, 1);
+                    GETEX(q1, 0, 0);
+                    int message = fpu_get_scratch(dyn);
+                    int rotate = fpu_get_scratch(dyn);
+                    int shift = fpu_get_scratch(dyn);
+
+                    VBSRL_V(message, q0, 4);
+                    VEXTRINS_W(message, q1, VEXTRINS_IMM_4_0(3, 0));
+                    VROTRI_W(rotate, message, 7);
+                    VROTRI_W(shift, message, 18);
+                    VSRLI_W(message, message, 3);
+                    VXOR_V(rotate, rotate, shift);
+                    VXOR_V(rotate, rotate, message);
+                    VADD_W(q0, q0, rotate);
+                    break;
+                }
+                case 0xCD: {
+                    INST_NAME("SHA256MSG2 Gx, Ex");
+                    nextop = F8;
+                    GETGX(q0, 1);
+                    GETEX(q1, 0, 0);
+                    int message = fpu_get_scratch(dyn);
+                    int rotate = fpu_get_scratch(dyn);
+                    int shift = fpu_get_scratch(dyn);
+
+                    VBSRL_V(message, q1, 8);
+                    VROTRI_W(rotate, message, 17);
+                    VROTRI_W(shift, message, 19);
+                    VXOR_V(rotate, rotate, shift);
+                    VSRLI_W(shift, message, 10);
+                    VXOR_V(rotate, rotate, shift);
+                    VADD_W(q0, q0, rotate);
+
+                    VBSLL_V(message, q0, 8);
+                    VROTRI_W(rotate, message, 17);
+                    VROTRI_W(shift, message, 19);
+                    VXOR_V(rotate, rotate, shift);
+                    VSRLI_W(shift, message, 10);
+                    VXOR_V(rotate, rotate, shift);
+                    VADD_W(q0, q0, rotate);
+                    break;
+                }
                 case 0xF0:
                     INST_NAME("MOVBE Gd, Ed");
                     nextop = F8;
@@ -1462,57 +1538,57 @@ uintptr_t dynarec64_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 SMWRITE2();
             }
             break;
-#define GO(GETFLAGS, NO, YES, NATNO, NATYES, F, I)                                          \
-    COMIS_JCC(I);                                                                           \
-    READFLAGS_FUSION(F, x1, x2, x3, x4, x5);                                                \
-    i32_ = F32S;                                                                            \
-    if (rex.is32bits)                                                                       \
-        j64 = (uint32_t)(addr + i32_);                                                      \
-    else                                                                                    \
-        j64 = addr + i32_;                                                                  \
-    JUMP(j64, 1);                                                                           \
-    if (!COMIS_FUSED() && !dyn->insts[ninst].nat_flags_fusion) {                            \
-        if (cpuext.lbt) {                                                                   \
-            X64_SETJ(x1, I);                                                                \
-        } else {                                                                            \
-            GETFLAGS;                                                                       \
-        }                                                                                   \
-    }                                                                                       \
-    if (dyn->insts[ninst].x64.jmp_insts == -1 || CHECK_CACHE()) {                           \
-        /* out of the block */                                                              \
-        i32 = dyn->insts[ninst].epilog - (dyn->native_size);                                \
-        if (COMIS_FUSED()) {                                                                \
-            COMIS_BRANCH_NOT_TAKEN(i32, ninst);                                             \
-        } else if (dyn->insts[ninst].nat_flags_fusion) {                                    \
-            NATIVEJUMP_safe(NATNO, i32, ninst);                                             \
-        } else {                                                                            \
-            if (cpuext.lbt)                                                                 \
-                BEQZ_safe(x1, i32, ninst);                                                  \
-            else                                                                            \
-                B##NO##_safe(x1, i32, ninst);                                               \
-        }                                                                                   \
-        if (dyn->insts[ninst].x64.jmp_insts == -1) {                                        \
-            if (!(dyn->insts[ninst].x64.barrier & BARRIER_FLOAT))                           \
-                fpu_purgecache(dyn, ninst, 1, tmp1, tmp2, tmp3);                            \
-            jump_to_next(dyn, j64, 0, ninst, rex.is32bits);                                 \
-        } else {                                                                            \
-            CacheTransform(dyn, ninst, cacheupd, tmp1, tmp2, tmp3);                         \
-            i32 = dyn->insts[dyn->insts[ninst].x64.jmp_insts].address - (dyn->native_size); \
-            B(i32);                                                                         \
-        }                                                                                   \
-    } else {                                                                                \
-        /* inside the block */                                                              \
-        i32 = dyn->insts[dyn->insts[ninst].x64.jmp_insts].address - (dyn->native_size);     \
-        if (COMIS_FUSED()) {                                                                \
-            COMIS_BRANCH_TAKEN(i32, dyn->insts[ninst].x64.jmp_insts);                       \
-        } else if (dyn->insts[ninst].nat_flags_fusion) {                                    \
-            NATIVEJUMP_safe(NATYES, i32, dyn->insts[ninst].x64.jmp_insts);                  \
-        } else {                                                                            \
-            if (cpuext.lbt)                                                                 \
-                BNEZ_safe(tmp1, i32, dyn->insts[ninst].x64.jmp_insts);                      \
-            else                                                                            \
-                B##YES##_safe(tmp1, i32, dyn->insts[ninst].x64.jmp_insts);                  \
-        }                                                                                   \
+#define GO(GETFLAGS, NO, YES, NATNO, NATYES, F, I)                                                 \
+    COMIS_JCC(I);                                                                                  \
+    READFLAGS_FUSION(F, x1, x2, x3, x4, x5);                                                       \
+    i32_ = F32S;                                                                                   \
+    if (rex.is32bits)                                                                              \
+        j64 = (uint32_t)(addr + i32_);                                                             \
+    else                                                                                           \
+        j64 = addr + i32_;                                                                         \
+    JUMP(j64, 1);                                                                                  \
+    if (!COMIS_FUSED() && !dyn->insts[ninst].nat_flags_fusion) {                                   \
+        if (cpuext.lbt) {                                                                          \
+            X64_SETJ(x1, I);                                                                       \
+        } else {                                                                                   \
+            GETFLAGS;                                                                              \
+        }                                                                                          \
+    }                                                                                              \
+    if (dyn->insts[ninst].x64.jmp_insts == -1 || CHECK_CACHE()) {                                  \
+        /* out of the block */                                                                     \
+        i32 = dyn->insts[ninst].epilog - (dyn->native_size);                                       \
+        if (COMIS_FUSED()) {                                                                       \
+            COMIS_BRANCH_NOT_TAKEN(i32, ninst);                                                    \
+        } else if (dyn->insts[ninst].nat_flags_fusion) {                                           \
+            NATIVEJUMP_safe(NATNO, i32, ninst);                                                    \
+        } else {                                                                                   \
+            if (cpuext.lbt)                                                                        \
+                BEQZ_safe(x1, i32, ninst);                                                         \
+            else                                                                                   \
+                B##NO##_safe(x1, i32, ninst);                                                      \
+        }                                                                                          \
+        if (dyn->insts[ninst].x64.jmp_insts == -1) {                                               \
+            if (!(dyn->insts[ninst].x64.barrier & BARRIER_FLOAT))                                  \
+                fpu_purgecache(dyn, ninst, 1, tmp1, tmp2, tmp3);                                   \
+            jump_to_next(dyn, j64, 0, ninst, rex.is32bits);                                        \
+        } else {                                                                                   \
+            CacheTransform(dyn, ninst, cacheupd, tmp1, tmp2, tmp3);                                \
+            i32 = dyn->insts[dyn->insts[ninst].x64.jmp_insts].branch_address - (dyn->native_size); \
+            B(i32);                                                                                \
+        }                                                                                          \
+    } else {                                                                                       \
+        /* inside the block */                                                                     \
+        i32 = dyn->insts[dyn->insts[ninst].x64.jmp_insts].branch_address - (dyn->native_size);     \
+        if (COMIS_FUSED()) {                                                                       \
+            COMIS_BRANCH_TAKEN(i32, dyn->insts[ninst].x64.jmp_insts);                              \
+        } else if (dyn->insts[ninst].nat_flags_fusion) {                                           \
+            NATIVEJUMP_safe(NATYES, i32, dyn->insts[ninst].x64.jmp_insts);                         \
+        } else {                                                                                   \
+            if (cpuext.lbt)                                                                        \
+                BNEZ_safe(tmp1, i32, dyn->insts[ninst].x64.jmp_insts);                             \
+            else                                                                                   \
+                B##YES##_safe(tmp1, i32, dyn->insts[ninst].x64.jmp_insts);                         \
+        }                                                                                          \
     }
 
             GOCOND(0x80, "J", "Id");
@@ -1612,7 +1688,7 @@ uintptr_t dynarec64_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 WBACK;
             } else {
                 FAKEED;
-                if (!rex.w && !rex.is32bits && MODREG && NEED_ZEROUP(ed)) { ZEROUP(ed); }
+                if (!rex.w && !rex.is32bits && MODREG && NEED_ZEROUP(ed)) { ZEROUP_RESULT(ed); }
                 F8;
             }
             break;
@@ -1626,7 +1702,7 @@ uintptr_t dynarec64_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 SETFLAGS(X_ALL, SF_SET_PENDING, NAT_FLAGS_NOFUSION);
             GETGDs;
             GETEDsd(0);
-            if (!rex.w && MODREG && NEED_ZEROUP(ed)) { ZEROUP(ed); }
+            if (!rex.w && MODREG && NEED_ZEROUP(ed)) { ZEROUP_RESULT(ed); }
             ANDI(x3, xRCX, rex.w ? 0x3f : 0x1f);
             CBZ_NEXT(x3);
             emit_shld32(dyn, ninst, rex, ed, gd, x3, x4, x5, x6);
@@ -1699,7 +1775,7 @@ uintptr_t dynarec64_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 WBACK;
             } else {
                 FAKEED;
-                if (!rex.w && !rex.is32bits && MODREG && NEED_ZEROUP(ed)) { ZEROUP(ed); }
+                if (!rex.w && !rex.is32bits && MODREG && NEED_ZEROUP(ed)) { ZEROUP_RESULT(ed); }
                 F8;
             }
             break;
@@ -1713,7 +1789,7 @@ uintptr_t dynarec64_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 SETFLAGS(X_ALL, SF_SET_PENDING, NAT_FLAGS_NOFUSION);
             GETGDs;
             GETEDsd(0);
-            if (!rex.w && MODREG && NEED_ZEROUP(ed)) { ZEROUP(ed); }
+            if (!rex.w && MODREG && NEED_ZEROUP(ed)) { ZEROUP_RESULT(ed); }
             ANDI(x3, xRCX, rex.w ? 0x3f : 0x1f);
             CBZ_NEXT(x3);
             emit_shrd32(dyn, ninst, rex, ed, gd, x3, x5, x4, x6);
@@ -1870,7 +1946,7 @@ uintptr_t dynarec64_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 } else {
                     MUL_W(gd, gd, ed);
                 }
-                if (NEED_ZEROUP(gd)) ZEROUP(gd);
+                if (NEED_ZEROUP(gd)) ZEROUP_RESULT(gd);
             }
             IFX (X_SF) {
                 SRLI_D(x3, gd, rex.w ? 63 : 31);
@@ -1940,6 +2016,7 @@ uintptr_t dynarec64_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 addr = geted(dyn, addr, ninst, nextop, &ed, x2, x1, &fixedaddress, rex, NULL, 1, 0);
                 LD_BU(gd, ed, fixedaddress);
             }
+            UP32_ZERO(gd);
             break;
         case 0xB7:
             INST_NAME("MOVZX Gd, Ew");
@@ -1953,6 +2030,7 @@ uintptr_t dynarec64_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 addr = geted(dyn, addr, ninst, nextop, &ed, x2, x1, &fixedaddress, rex, NULL, 1, 0);
                 LD_HU(gd, ed, fixedaddress);
             }
+            UP32_ZERO(gd);
             break;
         case 0xBA:
             nextop = F8;
@@ -2161,7 +2239,7 @@ uintptr_t dynarec64_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 addr = geted(dyn, addr, ninst, nextop, &ed, x3, x1, &fixedaddress, rex, NULL, 1, 0);
                 LD_B(gd, ed, fixedaddress);
             }
-            if (NEED_ZEROUP(gd)) ZEROUP(gd);
+            if (NEED_ZEROUP(gd)) ZEROUP_RESULT(gd);
             break;
         case 0xBF:
             INST_NAME("MOVSX Gd, Ew");
@@ -2175,7 +2253,7 @@ uintptr_t dynarec64_0F(dynarec_la64_t* dyn, uintptr_t addr, uintptr_t ip, int ni
                 addr = geted(dyn, addr, ninst, nextop, &ed, x3, x1, &fixedaddress, rex, NULL, 1, 0);
                 LD_H(gd, ed, fixedaddress);
             }
-            if (NEED_ZEROUP(gd)) ZEROUP(gd);
+            if (NEED_ZEROUP(gd)) ZEROUP_RESULT(gd);
             break;
         case 0xC0:
             INST_NAME("XADD Eb, Gb");

@@ -199,6 +199,7 @@
 #() cFpi
 #() cFpp
 #() wFpi
+#() wFpp
 #() iFEi
 #() iFEu
 #() iFEp
@@ -543,6 +544,7 @@
 #() vFpLL
 #() vFpLp
 #() vFppi
+#() vFppC
 #() vFppu
 #() vFppU
 #() vFppf
@@ -661,6 +663,7 @@
 #() iFpfu
 #() iFpff
 #() iFpdd
+#() iFpdp
 #() iFpli
 #() iFpll
 #() iFplL
@@ -1240,6 +1243,8 @@
 #() iFuppi
 #() iFuppu
 #() iFuppp
+#() iFllpp
+#() iFlpup
 #() iFLpLp
 #() iFLppp
 #() iFpcLp
@@ -1625,6 +1630,7 @@
 #() pFpiiU
 #() pFpiip
 #() pFpiuu
+#() pFpiup
 #() pFpiUL
 #() pFpiLi
 #() pFpiLu
@@ -1988,6 +1994,7 @@
 #() iFpiiip
 #() iFpiiui
 #() iFpiiuu
+#() iFpiiup
 #() iFpiipi
 #() iFpiipp
 #() iFpiuwp
@@ -2300,6 +2307,7 @@
 #() pFpiiii
 #() pFpiiip
 #() pFpiiuu
+#() pFpiiup
 #() pFpiipi
 #() pFpiipp
 #() pFpiCCC
@@ -2705,6 +2713,7 @@
 #() iFppuipp
 #() iFppuIII
 #() iFppuIup
+#() iFppuuup
 #() iFppuuLp
 #() iFppuupL
 #() iFppuupp
@@ -2932,6 +2941,7 @@
 #() pFppipip
 #() pFppippi
 #() pFppippp
+#() pFppuiip
 #() pFppuuuu
 #() pFppuupp
 #() pFppuLli
@@ -3132,9 +3142,11 @@
 #() iFuuppppp
 #() iFupupppu
 #() iFpiiiiii
+#() iFpiiiiup
 #() iFpiiiuwp
 #() iFpiiifff
 #() iFpiiCCCC
+#() iFpiiuiip
 #() iFpiiffff
 #() iFpiipiii
 #() iFpiipppp
@@ -3471,6 +3483,7 @@
 #() iFpippiiii
 #() iFpippuuui
 #() iFpippuupp
+#() iFpipppppp
 #() iFpCCWWpWu
 #() iFpWCuWCuu
 #() iFpuiiipip
@@ -3597,6 +3610,7 @@
 #() pFpLppLLiL
 #() pFppiiiiii
 #() pFpppipipi
+#() pFpppuuiip
 #() pFppplippp
 #() pFppppuppp
 #() pFpppppiip
@@ -3769,13 +3783,16 @@
 #() pFEpppppppp
 #() pFuupuuuuuu
 #() pFpiiiiuuuu
+#() pFpiiiiuuup
 #() pFpiiuuuuii
+#() pFpupupupui
 #() pFpLpLLipui
 #() pFpLppLLiLi
 #() pFppupupuuu
 #() pFppupppppp
 #() pFpppiiiiii
 #() pFpppuipppp
+#() pFpppuuiiip
 #() pFpppppuupp
 #() iWEpuuiippu
 #() iWEpuuuiipp
@@ -4497,6 +4514,8 @@ wrappeddbus:
   - dbus_connection_set_unix_user_function
   - dbus_connection_set_wakeup_main_function
   - dbus_server_set_new_connection_function
+- vFpppV:
+  - dbus_set_error
 - uFpipp:
   - dbus_connection_set_data
   - dbus_message_set_data
@@ -5401,6 +5420,8 @@ wrappedkrb5:
 - iFppppppipp:
   - krb5_get_init_creds_password
 wrappedlber:
+- iFppi:
+  - ber_sockbuf_remove_io
 - iFppip:
   - ber_sockbuf_add_io
 wrappedlcms2:
@@ -6834,6 +6855,7 @@ wrappednss3:
 - vFp:
   - PK11_SetPasswordFunc
   - PORT_SetUCS2_ASCIIConversionFunction
+  - PORT_SetUCS2_UTF8ConversionFunction
 - iFpp:
   - CERT_RegisterAlternateOCSPAIAInfoCallBack
   - NSS_RegisterShutdown

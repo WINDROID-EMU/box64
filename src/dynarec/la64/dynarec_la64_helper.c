@@ -444,11 +444,14 @@ void jump_to_next(dynarec_la64_t* dyn, uintptr_t ip, int reg, int ninst, int is3
     }
     CLEARIP();
     SMEND();
-#ifdef HAVE_TRACE
-    JIRL(xRA, dest, 0x0);
-#else
+    // The JIRL(xRA, ...) form is only for gdb backtraces, but it breaks the
+    // return-address-stack prediction on every block-to-block jump, which is
+    // not worth it. Uncomment temporarily when debugging with gdb.
+    // #ifdef HAVE_TRACE
+    //     JIRL(xRA, dest, 0x0);
+    // #else
     JIRL((dyn->insts[ninst].x64.has_callret ? xRA : xZR), dest, 0x0);
-#endif
+    // #endif
 }
 
 void ret_to_next(dynarec_la64_t* dyn, uintptr_t ip, int ninst, rex_t rex)
@@ -1403,11 +1406,18 @@ static void mmx_reflectcache(dynarec_la64_t* dyn, int ninst, int s1)
 }
 
 // SSE / SSE2 helpers
+void sse_merge_all(dynarec_la64_t* dyn, int ninst)
+{
+    for (int i = 0; i < 16; ++i)
+        xmm_scalar_merge(dyn, ninst, i);
+}
+
 // get lsx register for a SSE reg, create the entry if needed
 int sse_get_reg(dynarec_la64_t* dyn, int ninst, int s1, int a, int forwrite)
 {
     dyn->lsx.xmm_used |= 1 << a;
     if (dyn->lsx.ssecache[a].v != -1) {
+        xmm_scalar_merge(dyn, ninst, a);
         if (forwrite) {
             dyn->lsx.ssecache[a].write = 1; // update only if forwrite
             dyn->lsx.lsxcache[dyn->lsx.ssecache[a].reg].t = LSX_CACHE_XMMW;
@@ -1418,7 +1428,29 @@ int sse_get_reg(dynarec_la64_t* dyn, int ninst, int s1, int a, int forwrite)
     dyn->lsx.ssecache[a].reg = fpu_get_reg_xmm(dyn, forwrite ? LSX_CACHE_XMMW : LSX_CACHE_XMMR, a);
     int ret = dyn->lsx.ssecache[a].reg;
     dyn->lsx.ssecache[a].write = forwrite;
+    dyn->lsx.xmm_load |= 1 << a;
     VLD(ret, xEmu, offsetof(x64emu_t, xmm[a])); // skip VLD if migrate from avx
+    return ret;
+}
+
+int sse_get_reg_scalar(dynarec_la64_t* dyn, int ninst, int s1, int a, int forwrite, int kind)
+{
+    MAYUSE(forwrite);
+    dyn->lsx.xmm_used |= 1 << a;
+    if (dyn->lsx.scalarcache[a] != -1) {
+        int reg = dyn->lsx.scalarcache[a];
+        if (dyn->lsx.lsxcache[reg].t == (kind == XMM_SCALAR_SS ? LSX_CACHE_XMM_S : LSX_CACHE_XMM_D)) return reg;
+        xmm_scalar_merge(dyn, ninst, a);
+    }
+    if (dyn->lsx.ssecache[a].v != -1) {
+        return dyn->lsx.ssecache[a].reg;
+    }
+    avx_forget_reg(dyn, ninst, a);
+    dyn->lsx.ssecache[a].reg = fpu_get_reg_xmm(dyn, LSX_CACHE_XMMR, a);
+    int ret = dyn->lsx.ssecache[a].reg;
+    dyn->lsx.ssecache[a].write = 0;
+    dyn->lsx.xmm_load |= 1 << a;
+    VLD(ret, xEmu, offsetof(x64emu_t, xmm[a]));
     return ret;
 }
 
@@ -1427,6 +1459,7 @@ int sse_get_reg_empty(dynarec_la64_t* dyn, int ninst, int s1, int a)
 {
     dyn->lsx.xmm_used |= 1 << a;
     if (dyn->lsx.ssecache[a].v != -1) {
+        xmm_scalar_discard(dyn, a);
         dyn->lsx.ssecache[a].write = 1;
         dyn->lsx.lsxcache[dyn->lsx.ssecache[a].reg].t = LSX_CACHE_XMMW;
         return dyn->lsx.ssecache[a].reg;
@@ -1446,9 +1479,10 @@ void sse_forget_reg(dynarec_la64_t* dyn, int ninst, int a)
     dyn->lsx.xmm_used |= 1 << a;
     if (dyn->lsx.ssecache[a].v == -1)
         return;
-    if (dyn->lsx.lsxcache[dyn->lsx.ssecache[a].reg].t == LSX_CACHE_XMMW) {
-        VST(dyn->lsx.ssecache[a].reg, xEmu, offsetof(x64emu_t, xmm[a]));
-    }
+    xmm_scalar_merge(dyn, ninst, a);
+    int reg = dyn->lsx.ssecache[a].reg;
+    if (dyn->lsx.lsxcache[reg].t == LSX_CACHE_XMMW)
+        VST(reg, xEmu, offsetof(x64emu_t, xmm[a]));
     fpu_free_reg(dyn, dyn->lsx.ssecache[a].reg);
     dyn->lsx.ssecache[a].v = -1;
     return;
@@ -1459,14 +1493,16 @@ void sse_reflect_reg(dynarec_la64_t* dyn, int ninst, int a)
     dyn->lsx.xmm_used |= 1 << a;
     if (dyn->lsx.ssecache[a].v == -1)
         return;
-    if (dyn->lsx.lsxcache[dyn->lsx.ssecache[a].reg].t == LSX_CACHE_XMMW) {
-        VST(dyn->lsx.ssecache[a].reg, xEmu, offsetof(x64emu_t, xmm[a]));
-    }
+    xmm_scalar_merge(dyn, ninst, a);
+    int reg = dyn->lsx.ssecache[a].reg;
+    if (dyn->lsx.lsxcache[reg].t == LSX_CACHE_XMMW)
+        VST(reg, xEmu, offsetof(x64emu_t, xmm[a]));
 }
 
 // purge the SSE cache for XMM0..XMM7 (to use before function native call)
 void sse_purge07cache(dynarec_la64_t* dyn, int ninst, int s1)
 {
+    sse_merge_all(dyn, ninst);
     int old = -1;
     for (int i = 0; i < 8; ++i)
         if (dyn->lsx.ssecache[i].v != -1 || dyn->lsx.avxcache[i].v != -1) {
@@ -1499,6 +1535,7 @@ void sse_purge07cache(dynarec_la64_t* dyn, int ninst, int s1)
 // purge the SSE cache only
 static void sse_purgecache(dynarec_la64_t* dyn, int ninst, int next, int s1)
 {
+    sse_merge_all(dyn, ninst);
     int old = -1;
     for (int i = 0; i < 16; ++i)
         if (dyn->lsx.ssecache[i].v != -1) {
@@ -1522,6 +1559,7 @@ static void sse_purgecache(dynarec_la64_t* dyn, int ninst, int next, int s1)
 
 static void sse_reflectcache(dynarec_la64_t* dyn, int ninst, int s1)
 {
+    sse_merge_all(dyn, ninst);
     for (int i = 0; i < 16; ++i)
         if (dyn->lsx.ssecache[i].v != -1) {
             dyn->lsx.xmm_used |= 1 << i;
@@ -1565,6 +1603,7 @@ int avx_get_reg(dynarec_la64_t* dyn, int ninst, int s1, int a, int forwrite, int
         VLD(ret, xEmu, offsetof(x64emu_t, xmm[a]));
         dyn->lsx.avxcache[a].upper_zero_pending = 1;
     } else {
+        dyn->lsx.ymm_load |= 1 << a;
         VLD(ret, xEmu, offsetof(x64emu_t, xmm[a]));
         VLD(SCRATCH, xEmu, offsetof(x64emu_t, ymm[a]));
         XVPERMI_Q(ret, SCRATCH, XVPERMI_IMM_4_0(0, 2));
@@ -1586,6 +1625,7 @@ int avx_get_reg_empty(dynarec_la64_t* dyn, int ninst, int s1, int a, int width)
         return dyn->lsx.avxcache[a].reg;
     }
     if (dyn->lsx.ssecache[a].v != -1) {
+        xmm_scalar_discard(dyn, a);
         fpu_free_reg(dyn, dyn->lsx.ssecache[a].reg);
         dyn->lsx.ssecache[a].v = -1;
     }
@@ -1720,6 +1760,7 @@ static void avx_reflectcache(dynarec_la64_t* dyn, int ninst, int s1)
 
 void fpu_pushcache(dynarec_la64_t* dyn, int ninst, int s1, int not07)
 {
+    sse_merge_all(dyn, ninst);
     int start = not07 ? 8 : 0;
     int n = 0;
 
@@ -1831,6 +1872,10 @@ void fpu_reset_cache(dynarec_la64_t* dyn, int ninst, int reset_n)
     // for STEP 2 & 3, just need to refresh with current, and undo the changes (push & swap)
     dyn->lsx = dyn->insts[ninst].lsx;
     lsxcacheUnwind(&dyn->lsx);
+    uint16_t ymm_pending = dyn->insts[ninst].vector_liveness.ymm_pending;
+    for (int i = 0; i < 16; ++i)
+        if (dyn->lsx.avxcache[i].v != -1)
+            dyn->lsx.avxcache[i].upper_zero_pending = (ymm_pending >> i) & 1;
 #else
     dyn->lsx = dyn->insts[reset_n].lsx;
 #endif
@@ -2385,18 +2430,51 @@ void la64_move64(dynarec_la64_t* dyn, int ninst, int reg, int64_t val)
     LU52I_D(reg, reg, (val >> 52) & 0xfff);
 }
 
+void doPreload(dynarec_la64_t* dyn, int ninst)
+{
+    uint32_t preload = dyn->insts[ninst].preload_xmmymm;
+    if (!preload)
+        return;
+    MESSAGE(LOG_INFO, "Preload XMM/YMM -------- %x\n", preload);
+    for (int i = 0; i < 16; ++i) {
+        if (preload & (1u << i)) {
+            dyn->lsx.avxcache[i].v = -1;
+            dyn->lsx.ssecache[i].reg = fpu_get_reg_xmm(dyn, LSX_CACHE_XMMR, i);
+            dyn->lsx.ssecache[i].write = 0;
+            VLD(dyn->lsx.ssecache[i].reg, xEmu, offsetof(x64emu_t, xmm[i]));
+        }
+        if (preload & (1u << (16 + i))) {
+            dyn->lsx.ssecache[i].v = -1;
+            dyn->lsx.avxcache[i].v = 0;
+            dyn->lsx.avxcache[i].reg = fpu_get_reg_ymm(dyn, LSX_CACHE_YMMR, i);
+            dyn->lsx.avxcache[i].upper_zero_pending = 0;
+            dyn->lsx.avxcache[i].write = 0;
+            VLD(dyn->lsx.avxcache[i].reg, xEmu, offsetof(x64emu_t, xmm[i]));
+            VLD(SCRATCH, xEmu, offsetof(x64emu_t, ymm[i]));
+            XVPERMI_Q(dyn->lsx.avxcache[i].reg, SCRATCH, XVPERMI_IMM_4_0(0, 2));
+        }
+    }
+    MESSAGE(LOG_INFO, "-------- Preload XMM/YMM\n");
+}
+
 
 void checkCRC(dynarec_la64_t* dyn, int ninst)
 {
+    // la64_crc_autocrc will use x1-x5 instead of A0-A4 to avoind having to move around the regs
+    // grab the dynablock address in x6, as this on will not be erased by crc functions
     int delta = -(dyn->native_size + sizeof(void*));
     PCADDU12I(x6, SPLIT20(delta));
     LD_D(x6, x6, SPLIT12(delta));
-    TABLE64C(x4, const_la64_crc_autocrc);
-    LD_D(x1, x6, offsetof(dynablock_t, x64_readaddr));
-    LD_WU(x2, x6, offsetof(dynablock_t, hash));
-    LD_WU(x3, x6, offsetof(dynablock_t, x64_size));
-    JIRL(xRA, x4, 0x0); // returns zero when the current source has the stored crc.
-    BEQZ(x1, 4+3*4);
-    TABLE64C(x3, const_native_next_invalid); // 2 opcodes
+    // prepare and call the crc function
+    TABLE64C(x3, const_la64_crc_autocrc);
+    LD_D(x1, x6, offsetof(dynablock_t, x64_addr));
+    LD_WU(x2, x6, offsetof(dynablock_t, x64_size));
+    JIRL(xRA, x3, 0x0);
+    LA64_RESTORE_VZERO();
+    // done, result in x1, load the stored hash (sign extended, as the crc will also be sign extended)
+    LD_W(x2, x6, offsetof(dynablock_t, hash));
+    // compare computed crc with stored one, jump to continue is equal
+    BEQ(x1, x2, 4+3*4); // TABLE64C generates 2 opcodes...
+    TABLE64C(x3, const_native_next_invalid);
     JIRL(xRA, x3, 0x0);
 }

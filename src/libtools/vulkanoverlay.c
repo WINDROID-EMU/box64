@@ -99,9 +99,13 @@ void freeVulkanOverlay(my_vulkanoverlay_t* v)
     kh_cstr_t k;
     kh_foreach_ref(v->wrappers, k, w, *w->x64 = 0;);
     kh_destroy(x64wrappers, v->wrappers);
+    v->wrappers = NULL;
     box_free((void*)v->lib_name);
     v->lib_name = NULL;
     v->idx = 0;
+    v->handle = NULL;
+    v->functions = NULL;
+    v->n_functions = 0;
 }
 
 #define MAPNAME3(N,M) N##M
@@ -872,22 +876,22 @@ void* LoadVulkanOverlay(const char* path, int flags)
         } else if(getenv("HOME")) {
             snprintf(tmp, sizeof(tmp)-1, "%s/.config/vulkan/implicit_layer.d/*.json", getenv("HOME"));
         }
-        int flags = GLOB_APPEND;
-        if(strlen(tmp)) glob(tmp, 0, NULL, &pglob); else flags = 0;
+        int glob_flags = GLOB_APPEND;
+        if(strlen(tmp)) glob(tmp, 0, NULL, &pglob); else glob_flags = 0;
         if(getenv("XDG_CONFIG_DIRS")) {
             snprintf(tmp, sizeof(tmp)-1, "%s/vulkan/implicit_layer.d/*.json", getenv("XDG_CONFIG_DIRS"));
         } else {
             snprintf(tmp, sizeof(tmp)-1, "/etc/xdg/vulkan/implicit_layer.d/*.json");
         }
-        glob(tmp, flags, NULL, &pglob);
-        flags = GLOB_APPEND;
+        glob(tmp, glob_flags, NULL, &pglob);
+        glob_flags = GLOB_APPEND;
         tmp[0] = 0;
         if(getenv("XDG_DATA_HOME")) {
             snprintf(tmp, sizeof(tmp)-1, "%s/vulkan/implicit_layer.d/*.json", getenv("XDG_DATA_HOME"));
         } else if(getenv("HOME")) {
             snprintf(tmp, sizeof(tmp)-1, "%s/.local/share/vulkan/implicit_layer.d/*.json", getenv("HOME"));
         }
-        glob(tmp, flags, NULL, &pglob);
+        glob(tmp, glob_flags, NULL, &pglob);
         // should also search XDG_DATA_DIRS, but it's a list, so a bit anoying to do...
 
         // now, look through all the json collected to find one that reference the lib
