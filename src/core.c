@@ -978,8 +978,13 @@ int initialize(int argc, const char **argv, char** env, x64emu_t** emulator, elf
                 SET_BOX64ENV(nobanner, 1);
                 BOX64ENV(log) = 0;
             } else {
-                printf_log(LOG_NONE, "winedbg detected, not launching it!\n");
-                exit(0);    // exiting, it doesn't work anyway
+                printf_log(LOG_NONE, "winedbg detected, disabling Wine debugger to prevent segfault\n");
+                // Set environment variables to disable Wine's debugger
+                setenv("WINEDEBUG", "-all", 1);  // Disable all Wine debug output
+                setenv("DISPLAY", "", 1);        // Prevent GUI debug windows
+                // Skip winedbg execution by modifying argv to skip it
+                nextarg++;  // Skip the winedbg argument
+                // Don't exit - continue with execution but without debugger
             }
         }
         box64_wine = 1;

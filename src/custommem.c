@@ -952,9 +952,80 @@ void* internal_customMalloc(size_t size, int is32bits)
     p_blocks[i].is32bits = is32bits;
     if(is32bits)    // unlocking, because mmap might use it
         mutex_unlock(&mutex_blocks);
-    void* p = is32bits
-        ? box_mmap(NULL, allocsize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_32BIT, -1, 0)
-        : (box64_is32bits ? box32_dynarec_mmap(allocsize, -1, 0) : InternalMmap(NULL, allocsize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0));
+    
+    void* p = NULL;
+    int mmap_attempts = 0;
+    
+    // Primary allocation attempt
+    if(is32bits) {
+        p = box_mmap(NULL, allocsize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_32BIT, -1, 0);
+        mmap_attempts++;
+    } else if(box64_is32bits) {
+        p = box32_dynarec_mmap(allocsize, -1, 0);
+        mmap_attempts++;
+    } else {
+        p = InternalMmap(NULL, allocsize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        mmap_attempts++;
+    }
+    
+    // Fallback allocation attempts if primary fails
+    if(p == MAP_FAILED || p == NULL) {
+        printf_log(LOG_DEBUG, "Primary mmap failed (attempt %d), trying fallback for size 0x%zx\n", mmap_attempts, allocsize);
+        
+        // Fallback 1: Try with MAP_NORESERVE to avoid overcommit issues
+        if(!is32bits) {
+            p = InternalMmap(NULL, allocsize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE, -1, 0);
+            mmap_attempts++;
+            if(p != MAP_FAILED && p != NULL) {
+                printf_log(LOG_DEBUG, "Fallback 1 (MAP_NORESERVE) succeeded\n");
+            }
+        }
+        
+        // Fallback 2: Try with smaller allocation size if the original is very large
+        if((p == MAP_FAILED || p == NULL) && allocsize > MMAPSIZE * 2) {
+            size_t reduced_allocsize = MMAPSIZE * 2;
+            reduced_allocsize = (reduced_allocsize + box64_pagesize - 1) & ~(box64_pagesize - 1);
+            if(reduced_allocsize >= fullsize) {
+                p = is32bits
+                    ? box_mmap(NULL, reduced_allocsize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_32BIT, -1, 0)
+                    : InternalMmap(NULL, reduced_allocsize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+                mmap_attempts++;
+                if(p != MAP_FAILED && p != NULL) {
+                    allocsize = reduced_allocsize;
+                    printf_log(LOG_DEBUG, "Fallback 2 (reduced size 0x%zx) succeeded\n", reduced_allocsize);
+                }
+            }
+        }
+        
+        // Fallback 3: Try with MAP_FIXED at a specific address range for 39-bit systems
+        if((p == MAP_FAILED || p == NULL) && !is32bits && !have48bits) {
+            void* hint_addr = (void*)0x200000000LL; // Safe 39-bit address
+            p = InternalMmap(hint_addr, allocsize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+            mmap_attempts++;
+            if(p != MAP_FAILED && p != NULL) {
+                printf_log(LOG_DEBUG, "Fallback 3 (fixed address at %p) succeeded\n", hint_addr);
+            }
+        }
+        
+        // Fallback 4: Last resort - try minimal allocation and hope for the best
+        if(p == MAP_FAILED || p == NULL) {
+            size_t minimal_allocsize = fullsize;
+            minimal_allocsize = (minimal_allocsize + box64_pagesize - 1) & ~(box64_pagesize - 1);
+            p = is32bits
+                ? box_mmap(NULL, minimal_allocsize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE | MAP_32BIT, -1, 0)
+                : InternalMmap(NULL, minimal_allocsize, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+            mmap_attempts++;
+            if(p != MAP_FAILED && p != NULL) {
+                allocsize = minimal_allocsize;
+                printf_log(LOG_DEBUG, "Fallback 4 (minimal size 0x%zx) succeeded\n", minimal_allocsize);
+            }
+        }
+        
+        if(p == MAP_FAILED || p == NULL) {
+            printf_log(LOG_INFO, "All %d mmap attempts failed for size 0x%zx\n", mmap_attempts, allocsize);
+        }
+    }
+    
     if(is32bits)
         mutex_lock(&mutex_blocks);
 #ifdef TRACE_MEMSTAT
@@ -1002,6 +1073,17 @@ void* internal_customMalloc(size_t size, int is32bits)
         p_blocks[i].is32bits = 0;
         errno = ENOMEM;
         mutex_unlock(&mutex_blocks);
+        return NULL;
+    }
+    
+    // Additional check for failed mmap
+    if(p == MAP_FAILED || p == NULL) {
+        printf_log(LOG_INFO, "Critical: Failed to allocate memory block %d (size 0x%zx)\n", i, allocsize);
+        p_blocks[i].size = 0;
+        p_blocks[i].block = NULL;
+        n_blocks--; // Decrement since we failed
+        mutex_unlock(&mutex_blocks);
+        errno = ENOMEM;
         return NULL;
     }
     #ifdef TRACE_MEMSTAT
@@ -1086,7 +1168,18 @@ void* internal_customRealloc(void* p, size_t size, int is32bits)
         }
         mutex_unlock(&mutex_blocks);
         void* newp = internal_customMalloc(size, is32bits);
-        memcpy(newp, p, subsize);
+        if(!newp) {
+            // Fallback: try with smaller size if allocation failed
+            size_t fallback_size = (size < subsize) ? subsize : (subsize * 2);
+            if(fallback_size > size) fallback_size = size; // Don't exceed requested size
+            newp = internal_customMalloc(fallback_size, is32bits);
+            if(!newp) {
+                printf_log(LOG_INFO, "Critical: realloc failed for size 0x%zx (fallback also failed)\n", size);
+                return NULL;
+            }
+            printf_log(LOG_DEBUG, "Realloc using fallback size 0x%zx instead of 0x%zx\n", fallback_size, size);
+        }
+        memcpy(newp, p, (subsize < size) ? subsize : size);
         internal_customFree(p, is32bits);
         return newp;
     }
@@ -2776,12 +2869,43 @@ void loadProtectionFromMap()
         }
     }
     if(!have48bits && !box64_is32bits) {
-        void* probe = InternalMmap((void*)0x7fff00000000LL, box64_pagesize, PROT_NONE,
-                                   MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0);
-        if(probe!=MAP_FAILED) {
-            if((uintptr_t)probe>=0x7fff00000000LL)
-                have48bits = 1;
-            InternalMunmap(probe, box64_pagesize);
+        // Try multiple probe addresses for better 48-bit detection
+        void* probe_addresses[] = {
+            (void*)0x7fff00000000LL,
+            (void*)0x10000000000LL,
+            (void*)0x8000000000LL
+        };
+        int num_probes = sizeof(probe_addresses) / sizeof(probe_addresses[0]);
+        
+        for(int i = 0; i < num_probes && !have48bits; i++) {
+            void* probe = InternalMmap(probe_addresses[i], box64_pagesize, PROT_NONE,
+                                       MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0);
+            if(probe!=MAP_FAILED) {
+                if((uintptr_t)probe >= (uintptr_t)probe_addresses[i]) {
+                    have48bits = 1;
+                    printf_log(LOG_DEBUG, "48-bit address space confirmed using probe at %p\n", probe_addresses[i]);
+                }
+                InternalMunmap(probe, box64_pagesize);
+            }
+        }
+        
+        // Additional check: look for high addresses in /proc/self/maps
+        if(!have48bits) {
+            FILE *f2 = fopen("/proc/self/maps", "r");
+            if(f2) {
+                while(!feof(f2) && !have48bits) {
+                    char* ret = fgets(buf, sizeof(buf), f2);
+                    (void)ret;
+                    uintptr_t s, e;
+                    if(sscanf(buf, "%lx-%lx", &s, &e)==2) {
+                        if(s >= 0x10000000000LL) { // Above 256GB
+                            have48bits = 1;
+                            printf_log(LOG_DEBUG, "48-bit address space detected from maps entry at %p\n", (void*)s);
+                        }
+                    }
+                }
+                fclose(f2);
+            }
         }
     }
     static int shown48bits = 0;
@@ -2790,12 +2914,45 @@ void loadProtectionFromMap()
         if(have48bits)
             printf_log(LOG_INFO, "Detected 48bits at least of address space\n");
         else
-            printf_log(LOG_INFO, "Didn't detect 48bits of address space, considering it's 39bits\n");
+            printf_log(LOG_INFO, "Didn't detect 48bits of address space, considering it's 39bits (may limit Wine memory reservations)\n");
     }
     if(!pbrk) {
         if (!box64_unittest_mode)
             printf_log(LOG_INFO, "Warning, program break not found\n");
         if(cur_brk) pbrk = *cur_brk;    // approximate is better than nothing
+        else {
+            // Android fallback: try to find heap by looking for anonymous rw regions
+            FILE *f2 = fopen("/proc/self/maps", "r");
+            if(f2) {
+                while(!feof(f2)) {
+                    char* ret = fgets(buf, sizeof(buf), f2);
+                    (void)ret;
+                    char r, w, x;
+                    uintptr_t s, e;
+                    char pathname[100];
+                    if(sscanf(buf, "%lx-%lx %c%c%c%*c %*x %*x:%*x %*d %99s", &s, &e, &r, &w, &x, pathname)==6) {
+                        // Look for anonymous rw regions in typical heap range
+                        if((r=='r') && (w=='w') && (x=='-') && 
+                           (strcmp(pathname, "[heap]")==0 || strcmp(pathname, "[anon:libc_malloc]")==0 || 
+                            strcmp(pathname, "[anon:scudo:primary]")==0 || strcmp(pathname, "[anon:scudo:secondary]")==0 ||
+                            strcmp(pathname, "")==0)) {
+                            // Check if it's in a reasonable heap range (typically below 0x100000000 for 32-bit, below 0x4000000000 for 64-bit)
+                            if(s < 0x4000000000LL && !pbrk) {
+                                pbrk = s;
+                                printf_log(LOG_INFO, "Found heap-like region at %p (fallback detection)\n", (void*)s);
+                                break;
+                            }
+                        }
+                    }
+                }
+                fclose(f2);
+            }
+            // Final fallback: use a safe default address
+            if(!pbrk) {
+                pbrk = 0x10000000; // Default heap start for ARM64
+                printf_log(LOG_INFO, "Using default heap address %p (fallback)\n", (void*)pbrk);
+            }
+        }
     }
     fclose(f);
     box64_mapclean = 1;

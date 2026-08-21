@@ -10,6 +10,8 @@
 #include "box64context.h"
 #include "custommem.h"
 
+extern int have48bits;
+
 typedef struct wine_prereserve_s
 {
     void*   addr;
@@ -24,7 +26,11 @@ typedef struct wine_prereserve_32_s
 #include "box32.h"
 #endif
 // only the prereseve argument is reserved, not the other zone that wine-preloader reserve
-static wine_prereserve_t my_wine_reserve[] = {{(void*)0x00010000, 0x00008000}, {(void*)0x00110000, 0x30000000}, {(void*)0x7f000000, 0x03000000}, {0, 0}, {0, 0}};
+// Default reservations for 48-bit systems
+static wine_prereserve_t my_wine_reserve_48bit[] = {{(void*)0x00010000, 0x00008000}, {(void*)0x00110000, 0x30000000}, {(void*)0x7f000000, 0x03000000}, {0, 0}, {0, 0}};
+// Alternative reservations for 39-bit systems (adjust high addresses to fit in 39-bit space)
+static wine_prereserve_t my_wine_reserve_39bit[] = {{(void*)0x00010000, 0x00008000}, {(void*)0x00110000, 0x30000000}, {(void*)0x7f000000, 0x03000000}, {(void*)0x3f00000000LL, 0x010000000LL}, {0, 0}};
+static wine_prereserve_t* my_wine_reserve = my_wine_reserve_48bit;
 
 int wine_preloaded = 0;
 
@@ -77,6 +83,16 @@ void preserve_highest32();
 void wine_prereserve(const char* reserve)
 {
     init_custommem_helper(my_context);
+    
+    // Select appropriate reserve array based on address space
+    if(!have48bits) {
+        my_wine_reserve = my_wine_reserve_39bit;
+        printf_log(LOG_INFO, "Using 39-bit Wine prereserve addresses\n");
+    } else {
+        my_wine_reserve = my_wine_reserve_48bit;
+        printf_log(LOG_INFO, "Using 48-bit Wine prereserve addresses\n");
+    }
+    
     void* addr = NULL;
     size_t size = 0;
 
@@ -90,6 +106,25 @@ void wine_prereserve(const char* reserve)
         int isfree = isBlockFree(my_wine_reserve[idx].addr, my_wine_reserve[idx].size);
         if(isfree) ret=mmap(my_wine_reserve[idx].addr, my_wine_reserve[idx].size, 0, MAP_FIXED|MAP_PRIVATE|MAP_ANON|MAP_NORESERVE, -1, 0); else ret = NULL;
         if(!isfree || (ret!=my_wine_reserve[idx].addr)) {
+            // Try alternative address for high regions on 39-bit systems
+            if(!have48bits && (uintptr_t)my_wine_reserve[idx].addr >= 0x100000000LL) {
+                // Try to find a free alternative in 39-bit space
+                void* alt_addr = (void*)((uintptr_t)my_wine_reserve[idx].addr & 0x0fffffffffLL); // Force into 39-bit range
+                if((uintptr_t)alt_addr < (uintptr_t)my_wine_reserve[idx].addr) {
+                    isfree = isBlockFree(alt_addr, my_wine_reserve[idx].size);
+                    if(isfree) {
+                        ret = mmap(alt_addr, my_wine_reserve[idx].size, 0, MAP_FIXED|MAP_PRIVATE|MAP_ANON|MAP_NORESERVE, -1, 0);
+                        if(ret == alt_addr) {
+                            my_wine_reserve[idx].addr = alt_addr;
+                            printf_log(LOG_INFO, "WINE prereserve adjusted to %p:0x%lx (39-bit fallback)\n", alt_addr, my_wine_reserve[idx].size);
+                            setProtection_mmap((uintptr_t)alt_addr, my_wine_reserve[idx].size, 0);
+                            ++idx;
+                            continue;
+                        }
+                    }
+                }
+            }
+            
             if(addr>=(void*)0x10000LL)
                 printf_log(LOG_INFO, "Warning, prereserve of %p:0x%lx is not free\n", my_wine_reserve[idx].addr, my_wine_reserve[idx].size);
             if(ret)
@@ -121,7 +156,7 @@ void* get_wine_prereserve()
         return &my_wine_reserve_32;
     } else
     #endif
-        return &my_wine_reserve;
+        return my_wine_reserve;
 }
 
 #ifdef DYNAREC
