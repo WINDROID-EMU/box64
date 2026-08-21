@@ -26,10 +26,16 @@ typedef struct wine_prereserve_32_s
 #include "box32.h"
 #endif
 // only the prereseve argument is reserved, not the other zone that wine-preloader reserve
+// NOTE: both arrays must keep at least TWO trailing {0,0} sentinels. add_no_overlap()
+// appends the WINEPRELOADRESERVE entry into the first free {0,0} slot it finds, so a
+// single trailing {0,0} gets consumed by that append and leaves no terminator at all,
+// which makes the consumer loops in wine_prereserve()/remove_prereserve() walk past the
+// end of the array (this was the 39-bit array's bug: it only had ONE spare slot).
+#define WINE_RESERVE_SLOTS 6
 // Default reservations for 48-bit systems
-static wine_prereserve_t my_wine_reserve_48bit[] = {{(void*)0x00010000, 0x00008000}, {(void*)0x00110000, 0x30000000}, {(void*)0x7f000000, 0x03000000}, {0, 0}, {0, 0}};
+static wine_prereserve_t my_wine_reserve_48bit[WINE_RESERVE_SLOTS] = {{(void*)0x00010000, 0x00008000}, {(void*)0x00110000, 0x30000000}, {(void*)0x7f000000, 0x03000000}, {0, 0}, {0, 0}, {0, 0}};
 // Alternative reservations for 39-bit systems (adjust high addresses to fit in 39-bit space)
-static wine_prereserve_t my_wine_reserve_39bit[] = {{(void*)0x00010000, 0x00008000}, {(void*)0x00110000, 0x30000000}, {(void*)0x7f000000, 0x03000000}, {(void*)0x3f00000000LL, 0x010000000LL}, {0, 0}};
+static wine_prereserve_t my_wine_reserve_39bit[WINE_RESERVE_SLOTS] = {{(void*)0x00010000, 0x00008000}, {(void*)0x00110000, 0x30000000}, {(void*)0x7f000000, 0x03000000}, {(void*)0x3f00000000LL, 0x010000000LL}, {0, 0}, {0, 0}};
 static wine_prereserve_t* my_wine_reserve = my_wine_reserve_48bit;
 
 int wine_preloaded = 0;
@@ -148,8 +154,8 @@ void* get_wine_prereserve()
         wine_prereserve(NULL);
     #ifdef BOX32
     if(box64_is32bits) {
-        static wine_prereserve_32_t my_wine_reserve_32[5];
-        for(int i=0; i<5; ++i) {
+        static wine_prereserve_32_t my_wine_reserve_32[WINE_RESERVE_SLOTS];
+        for(int i=0; i<WINE_RESERVE_SLOTS; ++i) {
             my_wine_reserve_32[i].addr = to_ptrv(my_wine_reserve[i].addr);
             my_wine_reserve_32[i].size = to_ulong(my_wine_reserve[i].size);
         }
