@@ -162,6 +162,9 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
     // ucontext_t *p already defined
     // uint32_t opcode already defined
     struct fpsimd_context *fpsimd = (struct fpsimd_context *)_fpsimd;
+    // an access already aligned to its natural size cannot be unaligned access
+    // consider it a genuine SIGBUS, for example: store to a shared file mapping past the end of the file after a truncation
+    #define CHECK_ALIGNED(addr, size) if((((uintptr_t)(addr)) & ((size)-1)) == 0) return 0;
     //printf_log(LOG_INFO, "Checking SIGBUS special cases with pc=%p, opcode=%x, fpsimd=%p\n", pc, opcode, fpsimd);
     if((opcode&0b10111111110000000000000000000000)==0b10111001000000000000000000000000) {
         // this is STR
@@ -172,6 +175,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         offset<<=scale;
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, 1<<scale);
         uint64_t value = p->uc_mcontext.regs[val];
         if(scale==3 && (((uintptr_t)addr)&3)==0) {
             for(int i=0; i<2; ++i)
@@ -192,6 +196,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
             offset |= (0xffffffffffffffffll<<9);
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, size);
         uint64_t value = p->uc_mcontext.regs[val];
         if(size==8 && (((uintptr_t)addr)&3)==0) {
             for(int i=0; i<2; ++i)
@@ -217,6 +222,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         int dest = (opcode>>5)&31;
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, 1<<scale);
         __uint128_t value = fpsimd->vregs[val];
         if(scale>2 && (((uintptr_t)addr)&3)==0) {
             for(int i=0; i<(1<<(scale-2)); ++i)
@@ -243,6 +249,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         int dest = (opcode>>5)&31;
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, 1<<scale);
         __uint128_t value = fpsimd->vregs[val];
         if(scale>2 && (((uintptr_t)addr)&3)==0) {
             for(int i=0; i<(1<<(scale-2)); ++i)
@@ -268,6 +275,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         int dest = (opcode>>5)&31;
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, 1<<scale);
         __uint128_t value = 0;
         if(scale>2 && (((uintptr_t)addr)&3)==0) {
             for(int i=0; i<(1<<(scale-2)); ++i)
@@ -295,6 +303,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         int dest = (opcode>>5)&31;
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, 1<<scale);
         __uint128_t value = 0;
         if(scale>2 && (((uintptr_t)addr)&3)==0) {
             for(int i=0; i<(1<<(scale-2)); ++i)
@@ -315,6 +324,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         offset<<=scale;
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, 1<<scale);
         uint64_t value = 0;
         if(scale==3 && (((uintptr_t)addr)&3)==0) {
             for(int i=0; i<2; ++i)
@@ -336,6 +346,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
             offset |= (0xffffffffffffffffll<<9);
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, size);
         uint64_t value = 0;
         if(size==8 && (((uintptr_t)addr)&3)==0) {
             for(int i=0; i<2; ++i)
@@ -356,6 +367,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         offset<<=scale;
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, 1<<scale);
         uint64_t value = p->uc_mcontext.regs[val];
         for(int i=0; i<(1<<scale); ++i)
             addr[i] = (value>>(i*8))&0xff;
@@ -371,6 +383,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
             offset |= (0xffffffffffffffffll<<9);
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, 2);
         uint64_t value = p->uc_mcontext.regs[val];
         for(int i=0; i<2; ++i)
             addr[i] = (value>>(i*8))&0xff;
@@ -390,6 +403,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         uint64_t offset = p->uc_mcontext.regs[dest2]<<S;
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest] + offset);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, 1<<scale);
         uint64_t value = p->uc_mcontext.regs[val];
         for(int i=0; i<(1<<scale); ++i)
             addr[i] = (value>>(i*8))&0xff;
@@ -408,6 +422,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         offset <<= scale;
         uintptr_t addr= p->uc_mcontext.regs[dest] + offset;
         if(is32bits) addr = addr&0xffffffff;
+        CHECK_ALIGNED(addr, 1<<scale);
         if((((uintptr_t)addr)&3)==0) {
             ((volatile uint32_t*)addr)[0] = p->uc_mcontext.regs[val1];
             ((volatile uint32_t*)addr)[1] = p->uc_mcontext.regs[val2];
@@ -431,6 +446,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         offset <<= scale;
         uintptr_t addr= p->uc_mcontext.regs[dest] + offset;
         if(is32bits) addr = addr&0xffffffff;
+        CHECK_ALIGNED(addr, 16);
         if((((uintptr_t)addr)&3)==0) {
             for(int i=0; i<4; ++i)
                 ((volatile uint32_t*)addr)[0+i] = (fpsimd->vregs[val1]>>(i*32))&0xffffffff;
@@ -452,6 +468,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         int dest = (opcode>>5)&31;
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest]);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, 8);
         uint64_t value = fpsimd->vregs[val]>>(idx*64);
         if((((uintptr_t)addr)&3)==0) {
             for(int i=0; i<2; ++i)
@@ -472,6 +489,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
             offset |= (0xffffffffffffffffll<<9);
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[dest]);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, size);
         uint64_t value = 0;
         if(size==8 && (((uintptr_t)addr)&3)==0) {
             for(int i=0; i<2; ++i)
@@ -494,6 +512,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
             offset |= (0xffffffffffffffffll<<9);
         volatile uint8_t* addr = (void*)(p->uc_mcontext.regs[src]);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        CHECK_ALIGNED(addr, size);
         uint64_t value = p->uc_mcontext.regs[val];
         if(size==8 && (((uintptr_t)addr)&3)==0) {
             for(int i=0; i<2; ++i)
@@ -507,6 +526,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
     } else {
         printf_log(LOG_INFO, "Unsupported SIGBUS special cases with pc=%p, opcode=%x (%s)\n", pc, opcode, arm64_print(opcode, (uintptr_t)pc));
     }
+#undef CHECK_ALIGNED
 #elif defined(LA64)
     ucontext_t *p = (ucontext_t *)ucntx;
     uint32_t inst = *(uint32_t*)pc;
@@ -536,6 +556,7 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
     if (size) {
         volatile uint8_t *addr = (void *)(p->uc_mcontext.__gregs[dest] + imm);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        if((((uintptr_t)addr) & (size - 1)) == 0) return 0;
         uint64_t value;
         if (is_fp) {
             #ifndef LA64_ABI_1
@@ -580,8 +601,10 @@ int sigbus_specialcases(siginfo_t* info, void * ucntx, void* pc, void* _fpsimd, 
         imm = SIGN_EXT(imm, 12);
         volatile uint8_t *addr = (void *)(p->uc_mcontext.__gregs[dest] + imm);
         if(is32bits) addr = (uint8_t*)(((uintptr_t)addr)&0xffffffff);
+        int size = (funct3 == 0b010 ? 4 : funct3 == 0b011 ? 8 : 2);
+        if((((uintptr_t)addr) & (size - 1)) == 0) return 0;
         uint64_t value = opcode == 0b0100011 ? p->uc_mcontext.__gregs[val] : p->uc_mcontext.__fpregs.__d.__f[val<<1];
-        for(int i = 0; i < (funct3 == 0b010 ? 4 : funct3 == 0b011 ? 8 : 2); ++i) {
+        for(int i = 0; i < size; ++i) {
             addr[i] = (value >> (i * 8)) & 0xff;
         }
         p->uc_mcontext.__gregs[0] += 4; // pc += 4

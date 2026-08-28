@@ -225,7 +225,7 @@ static void* findPollFct(void* fct)
 static void* reversePollFct(void* fct)
 {
     if(!fct) return fct;
-    #define GO(A) if((uintptr_t)fct == my_poll_fct_##A) return (void*)my_poll_fct_##A;
+    #define GO(A) if(fct == my_poll_##A) return (void*)my_poll_fct_##A;
     SUPER()
     #undef GO
     return (void*)AddCheckBridge(my_lib->w.bridge, iFpui, fct, 0, "GPollFunc");
@@ -586,7 +586,7 @@ static void* findGLogFuncFct(void* fct)
 static void* reverseGLogFuncFct(void* fct)
 {
     if(!fct) return fct;
-    #define GO(A) if((uintptr_t)fct == my_GLogFunc_fct_##A) return (void*)my_GLogFunc_fct_##A;
+    #define GO(A) if(fct == my_GLogFunc_##A) return (void*)my_GLogFunc_fct_##A;
     SUPER()
     #undef GO
     return (void*)AddCheckBridge(my_lib->w.bridge, vFpipp, fct, 0, "GLogFunc");
@@ -616,7 +616,7 @@ static void* findGPrintFuncFct(void* fct)
 static void* reverseGPrintFuncFct(void* fct)
 {
     if(!fct) return fct;
-    #define GO(A) if((uintptr_t)fct == my_GPrintFunc_fct_##A) return (void*)my_GPrintFunc_fct_##A;
+    #define GO(A) if(fct == my_GPrintFunc_##A) return (void*)my_GPrintFunc_fct_##A;
     SUPER()
     #undef GO
     return NULL;
@@ -650,7 +650,7 @@ static void* findGOptionArgFct(void* fct)
 static void* reverseGOptionArgFct(void* fct)
 {
     if(!fct) return fct;
-    #define GO(A) if((uintptr_t)fct == my_GOptionArg_fct_##A) return (void*)my_GOptionArg_fct_##A;
+    #define GO(A) if(fct == my_GOptionArg_##A) return (void*)my_GOptionArg_fct_##A;
     SUPER()
     #undef GO
     return (void*)AddCheckBridge(my_lib->w.bridge, iFpppp, fct, 0, "GOptionArgFunc");
@@ -871,10 +871,13 @@ static void* findGUnixFDSourceFuncFct(void* fct)
 
 #undef SUPER
 
-EXPORT void* my_g_markup_vprintf_escaped(x64emu_t *emu, void* fmt, void* b) {
-    // need to align on arm
-    myStackAlign(emu, (const char*)fmt, b, emu->scratch, R_EAX, 1);
+EXPORT void* my_g_markup_vprintf_escaped(x64emu_t *emu, void* fmt, x64_va_list_t V) {
+    #ifdef CONVERT_VALIST
+    CONVERT_VALIST(V);
+    #else
+    myStackAlignValist(emu, (const char*)fmt, emu->scratch, V);
     PREPARE_VALIST;
+    #endif
     return my->g_markup_vprintf_escaped(fmt, VARARGS);
 }
 
@@ -954,52 +957,80 @@ EXPORT void my_g_variant_get(x64emu_t* emu, void* value, void* fmt, uint64_t* V)
     my->g_variant_get_va(value, fmt, NULL, &VARARGS);
 }
 
-EXPORT void* my_g_strdup_vprintf(x64emu_t* emu, void* fmt, void* b)
+EXPORT void* my_g_strdup_vprintf(x64emu_t* emu, void* fmt, x64_va_list_t V)
 {
-    myStackAlign(emu, (const char*)fmt, b, emu->scratch, R_EAX, 1);
+    #ifdef CONVERT_VALIST
+    CONVERT_VALIST(V);
+    #else
+    myStackAlignValist(emu, (const char*)fmt, emu->scratch, V);
     PREPARE_VALIST;
+    #endif
     return my->g_strdup_vprintf(fmt, VARARGS);
 }
 
-EXPORT int my_g_vprintf(x64emu_t* emu, void* fmt, void* b)
+EXPORT int my_g_vprintf(x64emu_t* emu, void* fmt, x64_va_list_t V)
 {
-    myStackAlign(emu, (const char*)fmt, b, emu->scratch, R_EAX, 1);
+    #ifdef CONVERT_VALIST
+    CONVERT_VALIST(V);
+    #else
+    myStackAlignValist(emu, (const char*)fmt, emu->scratch, V);
     PREPARE_VALIST;
+    #endif
     return my->g_vprintf(fmt, VARARGS);
 }
 
-EXPORT int my_g_vfprintf(x64emu_t* emu, void* F, void* fmt, void* b)
+EXPORT int my_g_vfprintf(x64emu_t* emu, void* F, void* fmt, x64_va_list_t V)
 {
-    myStackAlign(emu, (const char*)fmt, b, emu->scratch, R_EAX, 2);
+    #ifdef CONVERT_VALIST
+    CONVERT_VALIST(V);
+    #else
+    myStackAlignValist(emu, (const char*)fmt, emu->scratch, V);
     PREPARE_VALIST;
+    #endif
     return my->g_vfprintf(F, fmt, VARARGS);
 }
 
-EXPORT int my_g_vsprintf(x64emu_t* emu, void* s, void* fmt, void* b)
+EXPORT int my_g_vsprintf(x64emu_t* emu, void* s, void* fmt, x64_va_list_t V)
 {
-    myStackAlign(emu, (const char*)fmt, b, emu->scratch, R_EAX, 2);
+    #ifdef CONVERT_VALIST
+    CONVERT_VALIST(V);
+    #else
+    myStackAlignValist(emu, (const char*)fmt, emu->scratch, V);
     PREPARE_VALIST;
+    #endif
     return my->g_vsprintf(s, fmt, VARARGS);
 }
 
-EXPORT int my_g_vsnprintf(x64emu_t* emu, void* s, unsigned long n, void* fmt, void* b)
+EXPORT int my_g_vsnprintf(x64emu_t* emu, void* s, unsigned long n, void* fmt, x64_va_list_t V)
 {
-    myStackAlign(emu, (const char*)fmt, b, emu->scratch, R_EAX, 3);
+    #ifdef CONVERT_VALIST
+    CONVERT_VALIST(V);
+    #else
+    myStackAlignValist(emu, (const char*)fmt, emu->scratch, V);
     PREPARE_VALIST;
+    #endif
     return my->g_vsnprintf(s, n, fmt, VARARGS);
 }
 
-EXPORT int my_g_vasprintf(x64emu_t* emu, void* s, void* fmt, void* b)
+EXPORT int my_g_vasprintf(x64emu_t* emu, void* s, void* fmt, x64_va_list_t V)
 {
-    myStackAlign(emu, (const char*)fmt, b, emu->scratch, R_EAX, 2);
+    #ifdef CONVERT_VALIST
+    CONVERT_VALIST(V);
+    #else
+    myStackAlignValist(emu, (const char*)fmt, emu->scratch, V);
     PREPARE_VALIST;
+    #endif
     return my->g_vasprintf(s, fmt, VARARGS);
 }
 
-EXPORT uint32_t my_g_printf_string_upper_bound(x64emu_t* emu, void* fmt, void* b)
+EXPORT uint32_t my_g_printf_string_upper_bound(x64emu_t* emu, void* fmt, x64_va_list_t V)
 {
-    myStackAlign(emu, (const char*)fmt, b, emu->scratch, R_EAX, 1);
+    #ifdef CONVERT_VALIST
+    CONVERT_VALIST(V);
+    #else
+    myStackAlignValist(emu, (const char*)fmt, emu->scratch, V);
     PREPARE_VALIST;
+    #endif
     return my->g_printf_string_upper_bound(fmt, VARARGS);
 }
 
@@ -1425,7 +1456,7 @@ EXPORT void my_g_propagate_prefixed_error(x64emu_t* emu, void* dest, void* src, 
 
 EXPORT int my_g_fprintf(x64emu_t* emu, void* f, void* fmt, uintptr_t* b)
 {
-    myStackAlign(emu, fmt, b, emu->scratch, R_EAX, 3);
+    myStackAlign(emu, fmt, b, emu->scratch, R_EAX, 2);
     PREPARE_VALIST;
     return my->g_vfprintf(f, fmt, VARARGS);
 }
